@@ -32,47 +32,38 @@ impl From<PrivmsgMessage> for ChatMessage {
 
 struct Chatbot {
     channel_name: String,
-    messages: Arc<Mutex<Vec<ChatMessage>>>,
+    connect_button_label: String,
 }
 
 impl Default for Chatbot {
     fn default() -> Self {
         Self {
             channel_name: String::new(),
-            messages: Arc::new(Mutex::new(Vec::new())),
+            connect_button_label: "Connect".to_string(),
         }
     }
 }
 
 impl eframe::App for Chatbot {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Channel:");
-                ui.text_edit_singleline(&mut self.channel_name);
-                if ui.button("Connect").clicked() {
-                    if !self.channel_name.is_empty() {
-                        let channel = self.channel_name.clone();
-                        let messages = Arc::clone(&self.messages);
-                        tokio::spawn(async move {
-                            handle_messages(channel, messages).await;
-                        });
-                    }
-                }
+        TopBottomPanel::top("top_panel")
+            .exact_height(40.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(30.0);
+                    ui.image(egui::include_image!("../assets/img/logo.png"));
+                    ui.label("Yambot version 0.1");
+                });
+            });
+
+        CentralPanel::default().show(ctx, |ui| {
+            ui.image(egui::include_image!("../assets/img/logo.png"));
+            ScrollArea::vertical().show(ui, |ui| {
+                ui.label("text");
             });
         });
 
-        CentralPanel::default().show(ctx, |ui| {
-            ScrollArea::vertical().show(ui, |ui| {
-                let messages: std::sync::MutexGuard<Vec<ChatMessage>> = self.messages.lock().unwrap();
-                for msg in messages.iter() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}: ", &msg.username));
-                        ui.label(&msg.message_text);
-                    });
-                }
-            });
-        });
+        // loop receiving  messages
 
         ctx.request_repaint();
     }
@@ -80,9 +71,22 @@ impl eframe::App for Chatbot {
 
 #[tokio::main]
 async fn main() {
-    let app = Chatbot::default();
-    let native_options = eframe::NativeOptions::default();
-    let _ = eframe::run_native("Yambot", native_options, Box::new(|_| Box::new(app)));
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([600.0, 800.0]),
+        ..Default::default()
+    };
+    let _ = eframe::run_native(
+        "Yambot",
+        native_options,
+        Box::new(|cc| {
+            cc.egui_ctx.set_style(egui::Style {
+                visuals: egui::Visuals::dark(),
+                ..egui::Style::default()
+            });
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Box::<Chatbot>::default()
+        }),
+    );
 }
 
 async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessage>>>) {
