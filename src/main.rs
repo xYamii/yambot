@@ -16,20 +16,39 @@ enum Section {
     Tts,
     Settings,
 }
-
-enum MessageAction {
-    RefreshSfxList,
-    UpdateConfig,
-    UpdateSfx,
-    UpdateTTSConfig,
-    UpdateTTSLangList,
-    ConnectToChat,
-    DisconnectFromChat,
+#[derive(Debug)]
+enum Roles {
+    DEFAULT,
+    VIP,
+    SUBSCRIBER,
+    MODERATOR,
 }
 
-struct TransportMessage {
-    action: MessageAction,
-    payload: Option<String>,
+enum BackendMessageAction {
+    RemoveTTSLang(String),
+    AddTTSLang(String),
+    UpdateConfig {
+        channel_name: String,
+        auth_token: String,
+    },
+    UpdateSfxConfig(Config),
+    UpdateTTSConfig(Config),
+    ConnectToChat(String),
+    DisconnectFromChat(String),
+}
+
+#[derive(Debug)]
+enum FrontendMessageAction {
+    GetTTSLangs,
+    GetTTSConfig(Config),
+    GetSfxConfig(Config),
+    GetSfxList,
+}
+#[derive(Debug)]
+struct Config {
+    volume: u8,
+    enabled: bool,
+    permited_roles: Vec<Roles>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,15 +79,15 @@ struct Chatbot {
     channel_name: String,
     connect_button_label: String,
     selected_section: Section,
-    frontend_tx: tokio::sync::mpsc::Sender<TransportMessage>,
-    frontend_rx: tokio::sync::mpsc::Receiver<TransportMessage>,
+    frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
+    frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
 }
 
 impl Chatbot {
     fn new(
         channel_name: String,
-        frontend_tx: tokio::sync::mpsc::Sender<TransportMessage>,
-        frontend_rx: tokio::sync::mpsc::Receiver<TransportMessage>,
+        frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
+        frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
     ) -> Self {
         Self {
             channel_name: channel_name,
@@ -84,16 +103,16 @@ impl Chatbot {
         if ui.button(&self.connect_button_label).clicked() {
             if self.connect_button_label == "Connect" {
                 self.connect_button_label = "Disconnect".to_string();
-                let _ = self.frontend_tx.send(TransportMessage {
-                    action: MessageAction::ConnectToChat,
-                    payload: None,
-                });
+                let _ = self.frontend_tx.send(BackendMessageAction::ConnectToChat(
+                    self.channel_name.clone(),
+                ));
             } else {
                 self.connect_button_label = "Connect".to_string();
-                let _ = self.frontend_tx.send(TransportMessage {
-                    action: MessageAction::DisconnectFromChat,
-                    payload: None,
-                });
+                let _ = self
+                    .frontend_tx
+                    .send(BackendMessageAction::DisconnectFromChat(
+                        self.channel_name.clone(),
+                    ));
             };
         }
         ui.label("Content for the HOME section goes here.");
@@ -159,7 +178,19 @@ impl eframe::App for Chatbot {
             });
         });
 
-        // loop receiving  messages
+        while let Ok(message) = self.frontend_rx.try_recv() {
+            match message {
+                FrontendMessageAction::GetSfxConfig(config) => {
+                    println!("Getting sfx config {:?}", config);
+                }
+                FrontendMessageAction::GetTTSConfig(config) => {
+                    println!("Getting tts config {:?}", config);
+                }
+                _ => {
+                    println!("Received message");
+                }
+            }
+        }
 
         ctx.request_repaint();
     }
