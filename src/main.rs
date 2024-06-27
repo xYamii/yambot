@@ -1,4 +1,5 @@
 use eframe::egui::{self, CentralPanel, TopBottomPanel};
+use egui::{Color32, Label};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,29 @@ impl From<PrivmsgMessage> for ChatMessage {
         }
     }
 }
+struct ChatbotUILabels {
+    bot_status: String,
+}
+
+enum LogLevel {
+    INFO,
+    WARN,
+    ERROR,
+}
+impl LogLevel {
+    fn color(&self) -> Color32 {
+        match self {
+            LogLevel::INFO => Color32::from_rgb(0, 255, 0),
+            LogLevel::WARN => Color32::from_rgb(255, 255, 0),
+            LogLevel::ERROR => Color32::from_rgb(255, 50, 0),
+        }
+    }
+}
+struct LogMessage {
+    message: String,
+    timestamp: String,
+    log_level: LogLevel,
+}
 
 struct Chatbot {
     channel_name: String,
@@ -81,6 +105,8 @@ struct Chatbot {
     selected_section: Section,
     frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
     frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
+    labels: ChatbotUILabels,
+    log_messages: Vec<LogMessage>,
 }
 
 impl Chatbot {
@@ -95,27 +121,54 @@ impl Chatbot {
             selected_section: Section::Home,
             frontend_tx: frontend_tx,
             frontend_rx: frontend_rx,
+            labels: ChatbotUILabels {
+                bot_status: "Disconnected".to_string(),
+            },
+            log_messages: Vec::new(),
         }
     }
 
     fn show_home(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Home Section");
-        if ui.button(&self.connect_button_label).clicked() {
-            if self.connect_button_label == "Connect" {
-                self.connect_button_label = "Disconnect".to_string();
-                let _ = self.frontend_tx.send(BackendMessageAction::ConnectToChat(
-                    self.channel_name.clone(),
-                ));
-            } else {
-                self.connect_button_label = "Connect".to_string();
-                let _ = self
-                    .frontend_tx
-                    .send(BackendMessageAction::DisconnectFromChat(
+        ui.set_min_height(ui.max_rect().height());
+        ui.set_min_width(ui.max_rect().width());
+        ui.horizontal(|ui| {
+            if ui.button(&self.connect_button_label).clicked() {
+                if self.connect_button_label == "Connect" {
+                    self.connect_button_label = "Disconnect".to_string();
+                    let _ = self.frontend_tx.send(BackendMessageAction::ConnectToChat(
                         self.channel_name.clone(),
                     ));
-            };
-        }
-        ui.label("Content for the HOME section goes here.");
+                    self.labels.bot_status = "Connected".to_string();
+                } else {
+                    self.connect_button_label = "Connect".to_string();
+                    let _ = self
+                        .frontend_tx
+                        .send(BackendMessageAction::DisconnectFromChat(
+                            self.channel_name.clone(),
+                        ));
+                    self.labels.bot_status = "Disconnected".to_string();
+                };
+            }
+            ui.label(format!("Status: {}", self.labels.bot_status));
+        });
+        ui.separator();
+        ui.heading(egui::widget_text::RichText::new("Bot logs").color(Color32::WHITE));
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height() - 100.0)
+            .max_width(ui.available_width())
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                for mesasge in self.log_messages.iter() {
+                    ui.horizontal(|ui| {
+                        ui.label(&mesasge.timestamp);
+                        ui.label(
+                            egui::widget_text::RichText::new(&mesasge.message)
+                                .color(mesasge.log_level.color()),
+                        );
+                    });
+                    ui.separator();
+                }
+            });
     }
 
     fn show_sfx(&self, ui: &mut egui::Ui) {
