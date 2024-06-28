@@ -118,7 +118,7 @@ impl Chatbot {
         Self {
             channel_name: channel_name,
             connect_button_label: "Connect".to_string(),
-            selected_section: Section::Home,
+            selected_section: Section::Tts,
             frontend_tx: frontend_tx,
             frontend_rx: frontend_rx,
             labels: ChatbotUILabels {
@@ -172,13 +172,78 @@ impl Chatbot {
     }
 
     fn show_sfx(&self, ui: &mut egui::Ui) {
+        ui.set_min_height(ui.max_rect().height());
+        ui.set_min_width(ui.max_rect().width());
         ui.heading("SFX Section");
         ui.label(&self.channel_name);
     }
 
     fn show_tts(&self, ui: &mut egui::Ui) {
-        ui.heading("TTS Section");
-        ui.label("Content for the TTS section goes here.");
+        ui.set_height(ui.available_height());
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui: &mut egui::Ui| {
+                    if ui.button("Disable").clicked() {
+                        //add handling disable tts
+                    }
+                    ui.label("TTS status: ON");
+                });
+                ui.add_space(10.0);
+                ui.label("TTS volume (0-1 range):");
+                ui.add(egui::Slider::new(&mut 0.92, 0.0..=1.0));
+                ui.add_space(10.0);
+                ui.label("TTS permissions:");
+                ui.checkbox(&mut false, "Subs");
+                ui.checkbox(&mut false, "VIPS");
+                ui.checkbox(&mut false, "Mods");
+                // idk if its good idea, i want this block to be 100% height
+                ui.add_space(350.0);
+            });
+            ui.add_space(250.0);
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_height(ui.available_height());
+                let available_height = ui.available_height();
+                let table = egui_extras::TableBuilder::new(ui)
+                    .striped(true)
+                    .resizable(false)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(egui_extras::Column::auto())
+                    .column(egui_extras::Column::initial(200.0))
+                    .column(egui_extras::Column::auto())
+                    .min_scrolled_height(0.0)
+                    .max_scroll_height(available_height);
+
+                table
+                    .header(20.0, |mut header| {
+                        header.col(|ui| {
+                            ui.strong("No.");
+                        });
+                        header.col(|ui| {
+                            ui.strong("Language name");
+                        });
+                        header.col(|ui| {
+                            ui.strong("Enabled");
+                        });
+                    })
+                    .body(|mut body| {
+                        for row_index in 0..100 {
+                            let row_height = 18.0;
+                            body.row(row_height, |mut row| {
+                                row.col(|ui| {
+                                    ui.label(row_index.to_string());
+                                });
+                                row.col(|ui| {
+                                    ui.label("test");
+                                });
+                                row.col(|ui| {
+                                    ui.checkbox(&mut false, "");
+                                });
+                            });
+                        }
+                    })
+            });
+        });
     }
 
     fn show_settings(&self, ui: &mut egui::Ui) {
