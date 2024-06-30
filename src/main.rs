@@ -99,8 +99,13 @@ struct LogMessage {
     log_level: LogLevel,
 }
 
-struct Chatbot {
+struct ChatbotConfig {
     channel_name: String,
+    auth_token: String,
+}
+
+struct Chatbot {
+    config: ChatbotConfig,
     connect_button_label: String,
     selected_section: Section,
     frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
@@ -112,11 +117,15 @@ struct Chatbot {
 impl Chatbot {
     fn new(
         channel_name: String,
+        auth_token: String,
         frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
         frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
     ) -> Self {
         Self {
-            channel_name: channel_name,
+            config: ChatbotConfig {
+                channel_name: channel_name.clone(),
+                auth_token: auth_token.clone(),
+            },
             connect_button_label: "Connect".to_string(),
             selected_section: Section::Tts,
             frontend_tx: frontend_tx,
@@ -134,9 +143,17 @@ impl Chatbot {
         ui.horizontal(|ui| {
             if ui.button(&self.connect_button_label).clicked() {
                 if self.connect_button_label == "Connect" {
+                    if self.config.auth_token == "" {
+                        self.log_messages.push(LogMessage {
+                            message: "Tried to connect to the chat without auth token".to_string(),
+                            timestamp: chrono::Local::now().to_string(),
+                            log_level: LogLevel::ERROR,
+                        });
+                        return;
+                    }
                     self.connect_button_label = "Disconnect".to_string();
                     let _ = self.frontend_tx.send(BackendMessageAction::ConnectToChat(
-                        self.channel_name.clone(),
+                        self.config.channel_name.clone(),
                     ));
                     self.labels.bot_status = "Connected".to_string();
                 } else {
@@ -144,7 +161,7 @@ impl Chatbot {
                     let _ = self
                         .frontend_tx
                         .send(BackendMessageAction::DisconnectFromChat(
-                            self.channel_name.clone(),
+                            self.config.channel_name.clone(),
                         ));
                     self.labels.bot_status = "Disconnected".to_string();
                 };
@@ -175,7 +192,7 @@ impl Chatbot {
         ui.set_min_height(ui.max_rect().height());
         ui.set_min_width(ui.max_rect().width());
         ui.heading("SFX Section");
-        ui.label(&self.channel_name);
+        ui.label(&self.config.channel_name);
     }
 
     fn show_tts(&self, ui: &mut egui::Ui) {
@@ -246,9 +263,24 @@ impl Chatbot {
         });
     }
 
-    fn show_settings(&self, ui: &mut egui::Ui) {
-        ui.heading("Settings Section");
-        ui.label("Content for the SETTINGS section goes here.");
+    fn show_settings(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label("Channel name:");
+                ui.text_edit_singleline(&mut self.config.channel_name);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Auth token:");
+                ui.text_edit_singleline(&mut self.config.auth_token);
+                
+            });
+            if ui.button("Save").clicked() {
+                let _ = self.frontend_tx.send(BackendMessageAction::UpdateConfig {
+                    channel_name: self.config.channel_name.clone(),
+                    auth_token: self.config.auth_token.clone(),
+                });
+            }
+        });
     }
 }
 
@@ -333,7 +365,13 @@ async fn main() {
                 ..egui::Style::default()
             });
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Box::new(Chatbot::new("yamii".to_string(), frontend_tx, frontend_rx))
+            // read values from env or other config file that will be updated later on
+            Box::new(Chatbot::new(
+                "".to_string(),
+                String::new(),
+                frontend_tx,
+                frontend_rx,
+            ))
         }),
     );
 }
