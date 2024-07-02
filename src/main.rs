@@ -77,6 +77,23 @@ impl From<PrivmsgMessage> for ChatMessage {
 }
 struct ChatbotUILabels {
     bot_status: String,
+    connect_button: String,
+    tts_status: ButtonStatus,
+    sfx_status: ButtonStatus,
+}
+#[derive(PartialEq)]
+enum ButtonStatus {
+    ON,
+    OFF
+}
+
+impl ButtonStatus {
+    fn to_string(&self) -> String {
+        match self {
+            ButtonStatus::ON => "ON".to_string(),
+            ButtonStatus::OFF => "OFF".to_string(),
+        }
+    }
 }
 
 enum LogLevel {
@@ -84,6 +101,7 @@ enum LogLevel {
     WARN,
     ERROR,
 }
+
 impl LogLevel {
     fn color(&self) -> Color32 {
         match self {
@@ -106,7 +124,6 @@ struct ChatbotConfig {
 
 struct Chatbot {
     config: ChatbotConfig,
-    connect_button_label: String,
     selected_section: Section,
     frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
     frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
@@ -126,12 +143,14 @@ impl Chatbot {
                 channel_name: channel_name.clone(),
                 auth_token: auth_token.clone(),
             },
-            connect_button_label: "Connect".to_string(),
-            selected_section: Section::Tts,
+            selected_section: Section::Home,
             frontend_tx: frontend_tx,
             frontend_rx: frontend_rx,
             labels: ChatbotUILabels {
                 bot_status: "Disconnected".to_string(),
+                connect_button: "Connect".to_string(),
+                tts_status: ButtonStatus::ON,
+                sfx_status: ButtonStatus::ON,
             },
             log_messages: Vec::new(),
         }
@@ -141,8 +160,8 @@ impl Chatbot {
         ui.set_min_height(ui.max_rect().height());
         ui.set_min_width(ui.max_rect().width());
         ui.horizontal(|ui| {
-            if ui.button(&self.connect_button_label).clicked() {
-                if self.connect_button_label == "Connect" {
+            if ui.button(&self.labels.connect_button).clicked() {
+                if self.labels.connect_button == "Connect" {
                     if self.config.auth_token == "" {
                         self.log_messages.push(LogMessage {
                             message: "Tried to connect to the chat without auth token".to_string(),
@@ -151,13 +170,13 @@ impl Chatbot {
                         });
                         return;
                     }
-                    self.connect_button_label = "Disconnect".to_string();
+                    self.labels.connect_button = "Disconnect".to_string();
                     let _ = self.frontend_tx.send(BackendMessageAction::ConnectToChat(
                         self.config.channel_name.clone(),
                     ));
                     self.labels.bot_status = "Connected".to_string();
                 } else {
-                    self.connect_button_label = "Connect".to_string();
+                    self.labels.connect_button = "Connect".to_string();
                     let _ = self
                         .frontend_tx
                         .send(BackendMessageAction::DisconnectFromChat(
@@ -188,22 +207,67 @@ impl Chatbot {
             });
     }
 
-    fn show_sfx(&self, ui: &mut egui::Ui) {
-        ui.set_min_height(ui.max_rect().height());
-        ui.set_min_width(ui.max_rect().width());
-        ui.heading("SFX Section");
-        ui.label(&self.config.channel_name);
-    }
-
-    fn show_tts(&self, ui: &mut egui::Ui) {
+    fn show_sfx(&mut self, ui: &mut egui::Ui) {
         ui.set_height(ui.available_height());
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui: &mut egui::Ui| {
-                    if ui.button("Disable").clicked() {
-                        //add handling disable tts
+                    ui.label("SFX status: ");
+                    if ui.button(self.labels.sfx_status.to_string()).clicked() {
+                         if self.labels.sfx_status ==  ButtonStatus::ON {
+                            self.labels.sfx_status = ButtonStatus::OFF;
+                        } else {
+                            self.labels.sfx_status = ButtonStatus::ON;
+                        }
                     }
-                    ui.label("TTS status: ON");
+                });
+                ui.add_space(10.0);
+                ui.label("SFX volume (0-1 range):");
+                ui.add(egui::Slider::new(&mut 0.92, 0.0..=1.0));
+                ui.add_space(10.0);
+                ui.label("SFX permissions:");
+                ui.checkbox(&mut false, "Subs");
+                ui.checkbox(&mut false, "VIPS");
+                ui.checkbox(&mut false, "Mods");
+                ui.add_space(350.0);
+            });
+            ui.add_space(250.0);
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_height(ui.available_height());
+                ui.heading(egui::widget_text::RichText::new("Available sounds").color(Color32::WHITE));
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height() - 100.0)
+                    .max_width(ui.available_width())
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        for i in 0..100 {
+                            ui.horizontal(|ui| {
+                                ui.label(i.to_string());
+                                ui.label(
+                                    "sound name"
+                                );
+                            });
+                            ui.separator();
+                        }
+                    });
+            });
+        });
+    }
+
+    fn show_tts(&mut self, ui: &mut egui::Ui) {
+        ui.set_height(ui.available_height());
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui: &mut egui::Ui| {
+                    ui.label("TTS status: ");
+                    if ui.button(self.labels.tts_status.to_string()).clicked() {
+                         if self.labels.tts_status ==  ButtonStatus::ON {
+                            self.labels.tts_status = ButtonStatus::OFF;
+                        } else {
+                            self.labels.tts_status = ButtonStatus::ON;
+                        }
+                    }
                 });
                 ui.add_space(10.0);
                 ui.label("TTS volume (0-1 range):");
@@ -213,7 +277,6 @@ impl Chatbot {
                 ui.checkbox(&mut false, "Subs");
                 ui.checkbox(&mut false, "VIPS");
                 ui.checkbox(&mut false, "Mods");
-                // idk if its good idea, i want this block to be 100% height
                 ui.add_space(350.0);
             });
             ui.add_space(250.0);
@@ -244,7 +307,7 @@ impl Chatbot {
                         });
                     })
                     .body(|mut body| {
-                        for row_index in 0..100 {
+                        for row_index in 1..100 {
                             let row_height = 18.0;
                             body.row(row_height, |mut row| {
                                 row.col(|ui| {
@@ -294,8 +357,7 @@ impl eframe::App for Chatbot {
                     ui.image(egui::include_image!("../assets/img/logo.png"));
                     ui.label("Yambot");
                 });
-
-                ui.add_space(ui.available_width() - (ui.available_width() - 495.0)); // Adjust the space value as needed
+                ui.add_space(ui.available_width() - (ui.available_width() - 495.0));
                 ui.horizontal(|ui| {
                     if ui.button("HOME").clicked() {
                         self.selected_section = Section::Home;
@@ -321,7 +383,6 @@ impl eframe::App for Chatbot {
         });
 
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-            // this fucking shit doesnt want to center REEEE
             ui.vertical_centered(|ui| {
                 ui.label(format!("Version: {}", env!("CARGO_PKG_VERSION")));
                 ui.hyperlink_to("Source code", "https://www.github.com/xyamii/yambot");
