@@ -11,9 +11,9 @@ twitch-irc = "5.0.1"
 egui = "0.28.0"
 eframe = { version = "0.28.0", features = [
   "default",
-  "__screenshot", # __screenshot is so we can dump a screenshot using EFRAME_SCREENSHOT_TO
+  "__screenshot", 
 ] }
 egui_extras = { version = "0.28.0", features = ["default", "all_loaders"] }
-image = { version = "0.25.1", features = ["jpeg", "png"] } # Add the types you want support for
+image = { version = "0.25.1", features = ["jpeg", "png"] }
 chrono = "*"
 toml = "*"

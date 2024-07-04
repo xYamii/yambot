@@ -1,19 +1,15 @@
 use egui::{CentralPanel, Color32, TopBottomPanel};
 
 pub mod sfx;
+pub mod home;
+pub mod tts;
+pub mod settings;
 
 enum Section {
     Home,
     Sfx,
     Tts,
     Settings,
-}
-#[derive(Debug)]
-enum Roles {
-    DEFAULT,
-    VIP,
-    SUBSCRIBER,
-    MODERATOR,
 }
 
 pub enum BackendMessageAction {
@@ -36,32 +32,23 @@ pub enum FrontendMessageAction {
     GetSfxConfig(Config),
     GetSfxList,
 }
-#[derive(Debug)]
-struct Config {
-    volume: u8,
+#[derive(Debug, Clone)]
+pub struct Config {
+    volume: f32,
     enabled: bool,
-    permited_roles: Vec<Roles>,
+    permited_roles: PermitedRoles,
+}
+
+#[derive(Debug, Clone)]
+pub struct PermitedRoles {
+    pub subs: bool,
+    pub vips: bool,
+    pub mods: bool,
 }
 
 struct ChatbotUILabels {
     bot_status: String,
     connect_button: String,
-    tts_status: ButtonStatus,
-    sfx_status: ButtonStatus,
-}
-#[derive(PartialEq)]
-enum ButtonStatus {
-    ON,
-    OFF,
-}
-
-impl ButtonStatus {
-    fn to_string(&self) -> String {
-        match self {
-            ButtonStatus::ON => "ON".to_string(),
-            ButtonStatus::OFF => "OFF".to_string(),
-        }
-    }
 }
 
 enum LogLevel {
@@ -97,6 +84,8 @@ pub struct Chatbot {
     frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
     labels: ChatbotUILabels,
     log_messages: Vec<LogMessage>,
+    sfx_config: Config,
+    tts_config: Config,
 }
 
 impl Chatbot {
@@ -117,150 +106,31 @@ impl Chatbot {
             labels: ChatbotUILabels {
                 bot_status: "Disconnected".to_string(),
                 connect_button: "Connect".to_string(),
-                tts_status: ButtonStatus::ON,
-                sfx_status: ButtonStatus::ON,
             },
             log_messages: Vec::new(),
+            sfx_config: Config {
+                volume: 1.0,
+                enabled: true,
+                permited_roles: PermitedRoles {
+                    subs: true,
+                    vips: true,
+                    mods: true,
+                }
+            },
+            tts_config: Config {
+                volume: 1.0,
+                enabled: true,
+                permited_roles: PermitedRoles {
+                    subs: true,
+                    vips: true,
+                    mods: true,
+                }
+            },
         }
     }
 
-    fn show_sfx(&mut self, ui: &mut egui::Ui) {
-        ui.set_height(ui.available_height());
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui: &mut egui::Ui| {
-                    ui.label("SFX status: ");
-                    if ui.button(self.labels.sfx_status.to_string()).clicked() {
-                        if self.labels.sfx_status == ButtonStatus::ON {
-                            self.labels.sfx_status = ButtonStatus::OFF;
-                        } else {
-                            self.labels.sfx_status = ButtonStatus::ON;
-                        }
-                    }
-                });
-                ui.add_space(10.0);
-                ui.label("SFX volume (0-1 range):");
-                ui.add(egui::Slider::new(&mut 0.92, 0.0..=1.0));
-                ui.add_space(10.0);
-                ui.label("SFX permissions:");
-                ui.checkbox(&mut false, "Subs");
-                ui.checkbox(&mut false, "VIPS");
-                ui.checkbox(&mut false, "Mods");
-                ui.add_space(350.0);
-            });
-            ui.add_space(250.0);
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.set_height(ui.available_height());
-                ui.heading(
-                    egui::widget_text::RichText::new("Available sounds").color(Color32::WHITE),
-                );
-                egui::ScrollArea::vertical()
-                    .max_height(ui.available_height() - 100.0)
-                    .max_width(ui.available_width())
-                    .auto_shrink(false)
-                    .show(ui, |ui| {
-                        for i in 0..100 {
-                            ui.horizontal(|ui| {
-                                ui.label(i.to_string());
-                                ui.label("sound name");
-                            });
-                            ui.separator();
-                        }
-                    });
-            });
-        });
-    }
 
-    fn show_tts(&mut self, ui: &mut egui::Ui) {
-        ui.set_height(ui.available_height());
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui: &mut egui::Ui| {
-                    ui.label("TTS status: ");
-                    if ui.button(self.labels.tts_status.to_string()).clicked() {
-                        if self.labels.tts_status == ButtonStatus::ON {
-                            self.labels.tts_status = ButtonStatus::OFF;
-                        } else {
-                            self.labels.tts_status = ButtonStatus::ON;
-                        }
-                    }
-                });
-                ui.add_space(10.0);
-                ui.label("TTS volume (0-1 range):");
-                ui.add(egui::Slider::new(&mut 0.92, 0.0..=1.0));
-                ui.add_space(10.0);
-                ui.label("TTS permissions:");
-                ui.checkbox(&mut false, "Subs");
-                ui.checkbox(&mut false, "VIPS");
-                ui.checkbox(&mut false, "Mods");
-                ui.add_space(350.0);
-            });
-            ui.add_space(250.0);
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.set_height(ui.available_height());
-                let available_height = ui.available_height();
-                let table = egui_extras::TableBuilder::new(ui)
-                    .striped(true)
-                    .resizable(false)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(egui_extras::Column::auto())
-                    .column(egui_extras::Column::initial(200.0))
-                    .column(egui_extras::Column::auto())
-                    .min_scrolled_height(0.0)
-                    .max_scroll_height(available_height);
-
-                table
-                    .header(20.0, |mut header| {
-                        header.col(|ui| {
-                            ui.strong("No.");
-                        });
-                        header.col(|ui| {
-                            ui.strong("Language name");
-                        });
-                        header.col(|ui| {
-                            ui.strong("Enabled");
-                        });
-                    })
-                    .body(|mut body| {
-                        for row_index in 1..100 {
-                            let row_height = 18.0;
-                            body.row(row_height, |mut row| {
-                                row.col(|ui| {
-                                    ui.label(row_index.to_string());
-                                });
-                                row.col(|ui| {
-                                    ui.label("test");
-                                });
-                                row.col(|ui| {
-                                    ui.checkbox(&mut false, "");
-                                });
-                            });
-                        }
-                    })
-            });
-        });
-    }
-
-    fn show_settings(&mut self, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label("Channel name:");
-                ui.text_edit_singleline(&mut self.config.channel_name);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Auth token:");
-                ui.text_edit_singleline(&mut self.config.auth_token);
-            });
-            if ui.button("Save").clicked() {
-                let _ = self.frontend_tx.send(BackendMessageAction::UpdateConfig {
-                    channel_name: self.config.channel_name.clone(),
-                    auth_token: self.config.auth_token.clone(),
-                });
-            }
-        });
-    }
+    
 }
 
 impl eframe::App for Chatbot {

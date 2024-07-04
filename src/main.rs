@@ -1,7 +1,5 @@
-use eframe::egui::{self, CentralPanel, TopBottomPanel};
-use egui::{Color32, Label};
+use eframe::egui::{self};
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
