@@ -17,3 +17,4 @@ egui_extras = { version = "0.28.0", features = ["default", "all_loaders"] }
 image = { version = "0.25.1", features = ["jpeg", "png"] }
 chrono = "*"
 toml = "*"
+project-root = "0.2.2"
