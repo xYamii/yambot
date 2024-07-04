@@ -1,10 +1,15 @@
-use eframe::egui::{self, CentralPanel, ScrollArea, TopBottomPanel};
+use eframe::egui::{self};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
 use twitch_irc::TwitchIRCClient;
 use twitch_irc::{ClientConfig, SecureTCPTransport};
+
+pub mod ui;
+
+const WINDOW_WIDTH: f32 = 800.0;
+const WINDOW_HEIGHT: f32 = 600.0;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -30,59 +35,34 @@ impl From<PrivmsgMessage> for ChatMessage {
     }
 }
 
-struct Chatbot {
-    channel_name: String,
-    messages: Arc<Mutex<Vec<ChatMessage>>>,
-}
-
-impl Default for Chatbot {
-    fn default() -> Self {
-        Self {
-            channel_name: String::new(),
-            messages: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-impl eframe::App for Chatbot {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Channel:");
-                ui.text_edit_singleline(&mut self.channel_name);
-                if ui.button("Connect").clicked() {
-                    if !self.channel_name.is_empty() {
-                        let channel = self.channel_name.clone();
-                        let messages = Arc::clone(&self.messages);
-                        tokio::spawn(async move {
-                            handle_messages(channel, messages).await;
-                        });
-                    }
-                }
-            });
-        });
-
-        CentralPanel::default().show(ctx, |ui| {
-            ScrollArea::vertical().show(ui, |ui| {
-                let messages: std::sync::MutexGuard<Vec<ChatMessage>> = self.messages.lock().unwrap();
-                for msg in messages.iter() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}: ", &msg.username));
-                        ui.label(&msg.message_text);
-                    });
-                }
-            });
-        });
-
-        ctx.request_repaint();
-    }
-}
-
 #[tokio::main]
 async fn main() {
-    let app = Chatbot::default();
-    let native_options = eframe::NativeOptions::default();
-    let _ = eframe::run_native("Yambot", native_options, Box::new(|_| Box::new(app)));
+    let (backend_tx, frontend_rx) = tokio::sync::mpsc::channel(100);
+    let (frontend_tx, backend_rx) = tokio::sync::mpsc::channel(100);
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([WINDOW_WIDTH, WINDOW_HEIGHT])
+            .with_resizable(false),
+        ..Default::default()
+    };
+    let _ = eframe::run_native(
+        "Yambot",
+        native_options,
+        Box::new(|cc| {
+            cc.egui_ctx.set_style(egui::Style {
+                visuals: egui::Visuals::dark(),
+                ..egui::Style::default()
+            });
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            // read values from env or other config file that will be updated later on
+            Ok(Box::new(ui::Chatbot::new(
+                "".to_string(),
+                String::new(),
+                frontend_tx,
+                frontend_rx,
+            )))
+        }),
+    );
 }
 
 async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessage>>>) {
