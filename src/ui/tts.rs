@@ -25,7 +25,14 @@ impl Chatbot {
                 });
                 ui.add_space(10.0);
                 ui.label("TTS volume (0-1 range):");
-                ui.add(egui::Slider::new(&mut self.tts_config.volume, 0.0..=1.0));
+                // funny cus this returns giant floating point numbers
+                if ui.add(egui::Slider::new(&mut self.tts_config.volume, 0.0..=1.0)).drag_stopped() {
+                    self.frontend_tx
+                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                            self.tts_config.clone(),
+                        ))
+                        .unwrap();
+                };
                 ui.add_space(10.0);
                 ui.label("TTS permissions:");
                 if ui

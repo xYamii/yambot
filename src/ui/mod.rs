@@ -1,4 +1,5 @@
 use egui::{CentralPanel, Color32, TopBottomPanel};
+use serde::{Deserialize, Serialize};
 
 pub mod sfx;
 pub mod home;
@@ -11,7 +12,7 @@ enum Section {
     Tts,
     Settings,
 }
-
+#[derive(Debug)]
 pub enum BackendMessageAction {
     RemoveTTSLang(String),
     AddTTSLang(String),
@@ -32,14 +33,15 @@ pub enum FrontendMessageAction {
     GetSfxConfig(Config),
     GetSfxList,
 }
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
-    volume: f32,
+    // https://github.com/emilk/egui/discussions/4670
+    volume: f64,
     enabled: bool,
     permited_roles: PermitedRoles,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PermitedRoles {
     pub subs: bool,
     pub vips: bool,
@@ -71,10 +73,10 @@ struct LogMessage {
     timestamp: String,
     log_level: LogLevel,
 }
-
-struct ChatbotConfig {
-    channel_name: String,
-    auth_token: String,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChatbotConfig {
+    pub channel_name: String,
+    pub auth_token: String,
 }
 
 pub struct Chatbot {
@@ -90,16 +92,14 @@ pub struct Chatbot {
 
 impl Chatbot {
     pub fn new(
-        channel_name: String,
-        auth_token: String,
+        config: ChatbotConfig,
         frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
         frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
+        sfx_config: Config,
+        tts_config: Config,
     ) -> Self {
         Self {
-            config: ChatbotConfig {
-                channel_name: channel_name.clone(),
-                auth_token: auth_token.clone(),
-            },
+            config,
             selected_section: Section::Home,
             frontend_tx: frontend_tx,
             frontend_rx: frontend_rx,
@@ -108,24 +108,8 @@ impl Chatbot {
                 connect_button: "Connect".to_string(),
             },
             log_messages: Vec::new(),
-            sfx_config: Config {
-                volume: 1.0,
-                enabled: true,
-                permited_roles: PermitedRoles {
-                    subs: true,
-                    vips: true,
-                    mods: true,
-                }
-            },
-            tts_config: Config {
-                volume: 1.0,
-                enabled: true,
-                permited_roles: PermitedRoles {
-                    subs: true,
-                    vips: true,
-                    mods: true,
-                }
-            },
+            sfx_config,
+            tts_config
         }
     }
 

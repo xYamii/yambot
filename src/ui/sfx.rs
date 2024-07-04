@@ -27,7 +27,13 @@ impl Chatbot {
                 });
                 ui.add_space(10.0);
                 ui.label("SFX volume (0-1 range):");
-                ui.add(egui::Slider::new(&mut self.sfx_config.volume, 0.0..=1.0));
+                if ui.add(egui::Slider::new(&mut self.sfx_config.volume, 0.0..=1.0)).drag_stopped() {
+                    self.frontend_tx
+                        .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                            self.sfx_config.clone(),
+                        ))
+                        .unwrap();
+                };
                 ui.add_space(10.0);
                 ui.label("SFX permissions:");
                 if ui
