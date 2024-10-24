@@ -108,12 +108,21 @@ async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<Bac
     while let Some(message) = backend_rx.recv().await {
         match message {
             BackendMessageAction::UpdateTTSConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
-                    chatbot: backend::config::load_config().chatbot,
-                    sfx: backend::config::load_config().sfx,
+                    chatbot: current_config.chatbot,
+                    sfx: current_config.sfx,
                     tts: config,
                 });
-            }
+            },
+            BackendMessageAction::UpdateSfxConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
+                backend::config::save_config(&AppConfig {
+                    chatbot: current_config.chatbot,
+                    sfx: config,
+                    tts: current_config.tts,
+                });
+            },
             _ => {
                 println!("Received other message: {:?}", message);
             }
