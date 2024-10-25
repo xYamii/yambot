@@ -1,0 +1,21 @@
+[chatbot]
+channel_name = ""
+auth_token = ""
+
+[sfx]
+volume = 0.5
+enabled = true
+
+[sfx.permited_roles]
+subs = true
+vips = false
+mods = true
+
+[tts]
+volume = 1.0
+enabled = true
+
+[tts.permited_roles]
+subs = true
+vips = false
+mods = true
