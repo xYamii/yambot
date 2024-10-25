@@ -123,6 +123,14 @@ async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<Bac
                     tts: current_config.tts,
                 });
             },
+            BackendMessageAction::UpdateConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
+                backend::config::save_config(&AppConfig {
+                    chatbot: config,
+                    sfx: current_config.sfx,
+                    tts: current_config.tts,
+                });
+            },
             _ => {
                 println!("Received other message: {:?}", message);
             }

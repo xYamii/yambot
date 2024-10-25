@@ -16,10 +16,7 @@ enum Section {
 pub enum BackendMessageAction {
     RemoveTTSLang(String),
     AddTTSLang(String),
-    UpdateConfig {
-        channel_name: String,
-        auth_token: String,
-    },
+    UpdateConfig (ChatbotConfig),
     UpdateSfxConfig(Config),
     UpdateTTSConfig(Config),
     ConnectToChat(String),

@@ -1,4 +1,4 @@
-use super::{BackendMessageAction, Chatbot};
+use super::{BackendMessageAction, Chatbot, ChatbotConfig};
 
 impl Chatbot {
     pub fn show_settings(&mut self, ui: &mut egui::Ui) {
@@ -12,10 +12,12 @@ impl Chatbot {
                 ui.text_edit_singleline(&mut self.config.auth_token);
             });
             if ui.button("Save").clicked() {
-                let _ = self.frontend_tx.try_send(BackendMessageAction::UpdateConfig {
-                    channel_name: self.config.channel_name.clone(),
-                    auth_token: self.config.auth_token.clone(),
-                }).unwrap();
+                let _ = self.frontend_tx.try_send(BackendMessageAction::UpdateConfig(
+                    ChatbotConfig {
+                        channel_name: self.config.channel_name.clone(),
+                        auth_token: self.config.auth_token.clone(),
+                    },
+                )).unwrap();
             }
         });
     }
