@@ -1,5 +1,7 @@
+use backend::config::AppConfig;
 use eframe::egui::{self};
 use serde::{Deserialize, Serialize};
+use ui::BackendMessageAction;
 use std::sync::{Arc, Mutex};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
@@ -7,6 +9,7 @@ use twitch_irc::TwitchIRCClient;
 use twitch_irc::{ClientConfig, SecureTCPTransport};
 
 pub mod ui;
+pub mod backend;
 
 const WINDOW_WIDTH: f32 = 800.0;
 const WINDOW_HEIGHT: f32 = 600.0;
@@ -45,6 +48,10 @@ async fn main() {
             .with_resizable(false),
         ..Default::default()
     };
+    let config = backend::config::load_config();
+    tokio::spawn(async move {
+        handle_backend_messages(backend_rx).await;
+    });
     let _ = eframe::run_native(
         "Yambot",
         native_options,
@@ -56,10 +63,11 @@ async fn main() {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             // read values from env or other config file that will be updated later on
             Ok(Box::new(ui::Chatbot::new(
-                "".to_string(),
-                String::new(),
+                config.chatbot,
                 frontend_tx,
                 frontend_rx,
+                config.sfx,
+                config.tts,
             )))
         }),
     );
@@ -93,6 +101,40 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
             _ => {
                 println!("Received other message: {:?}", message);
             }
+        }
+    }
+}
+async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<BackendMessageAction>) {
+    while let Some(message) = backend_rx.recv().await {
+        match message {
+            BackendMessageAction::UpdateTTSConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
+                backend::config::save_config(&AppConfig {
+                    chatbot: current_config.chatbot,
+                    sfx: current_config.sfx,
+                    tts: config,
+                });
+            },
+            BackendMessageAction::UpdateSfxConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
+                backend::config::save_config(&AppConfig {
+                    chatbot: current_config.chatbot,
+                    sfx: config,
+                    tts: current_config.tts,
+                });
+            },
+            BackendMessageAction::UpdateConfig(config) => {
+                let current_config: AppConfig = backend::config::load_config();
+                backend::config::save_config(&AppConfig {
+                    chatbot: config,
+                    sfx: current_config.sfx,
+                    tts: current_config.tts,
+                });
+            },
+            _ => {
+                println!("Received other message: {:?}", message);
+            }
+            
         }
     }
 }
