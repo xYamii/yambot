@@ -17,7 +17,7 @@ impl Chatbot {
                             self.tts_config.enabled = true;
                         }
                         self.frontend_tx
-                            .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                            .try_send(super::FrontendToBackendMessage::UpdateTTSConfig(
                                 self.tts_config.clone(),
                             ))
                             .unwrap();
@@ -28,7 +28,7 @@ impl Chatbot {
                 // funny cus this returns giant floating point numbers
                 if ui.add(egui::Slider::new(&mut self.tts_config.volume, 0.0..=1.0)).drag_stopped() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateTTSConfig(
                             self.tts_config.clone(),
                         ))
                         .unwrap();
@@ -40,7 +40,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateTTSConfig(
                             self.tts_config.clone(),
                         ))
                         .unwrap();
@@ -50,7 +50,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateTTSConfig(
                             self.tts_config.clone(),
                         ))
                         .unwrap();
@@ -60,7 +60,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateTTSConfig(
                             self.tts_config.clone(),
                         ))
                         .unwrap();

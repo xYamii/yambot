@@ -1,8 +1,7 @@
 use backend::config::AppConfig;
 use eframe::egui::{self};
 use serde::{Deserialize, Serialize};
-use ui::BackendMessageAction;
-use std::sync::{Arc, Mutex};
+use ui::{BackendToFrontendMessage, FrontendToBackendMessage};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
 use twitch_irc::TwitchIRCClient;
@@ -50,7 +49,10 @@ async fn main() {
     };
     let config = backend::config::load_config();
     tokio::spawn(async move {
-        handle_backend_messages(backend_rx).await;
+        handle_frontend_to_backend_messages(
+            backend_rx,
+            backend_tx.clone()
+        ).await;
     });
     let _ = eframe::run_native(
         "Yambot",
@@ -73,7 +75,9 @@ async fn main() {
     );
 }
 
-async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessage>>>) {
+async fn handle_twitch_messages(channel_name: String) {
+    // TODO: add messages to local db
+    let mut messages: Vec<ChatMessage> = Vec::new();
     let config: ClientConfig<StaticLoginCredentials> = ClientConfig::default();
     let (mut incoming_messages, client) =
         TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
@@ -84,7 +88,7 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
             twitch_irc::message::ServerMessage::Privmsg(privmsg) => {
                 let chat_message: ChatMessage = privmsg.into();
                 println!("Message: {:?}", chat_message);
-                messages.lock().unwrap().push(chat_message);
+                messages.push(chat_message);
             }
             twitch_irc::message::ServerMessage::Join(join_msg) => {
                 println!("User joined: {}", join_msg.user_login);
@@ -104,31 +108,48 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
         }
     }
 }
-async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<BackendMessageAction>) {
+async fn handle_frontend_to_backend_messages(
+    mut backend_rx: tokio::sync::mpsc::Receiver<FrontendToBackendMessage>,
+    backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+) {
     while let Some(message) = backend_rx.recv().await {
         match message {
-            BackendMessageAction::UpdateTTSConfig(config) => {
+            FrontendToBackendMessage::UpdateTTSConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
                     chatbot: current_config.chatbot,
                     sfx: current_config.sfx,
                     tts: config,
                 });
+                let _ = backend_tx.try_send(
+                    BackendToFrontendMessage::CreateLog(ui::LogLevel::INFO, "TTS config updated".to_string())
+                );
             },
-            BackendMessageAction::UpdateSfxConfig(config) => {
+            FrontendToBackendMessage::UpdateSfxConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
                     chatbot: current_config.chatbot,
                     sfx: config,
                     tts: current_config.tts,
                 });
+                let _ = backend_tx.try_send(
+                    BackendToFrontendMessage::CreateLog(ui::LogLevel::INFO, "SFX config updated".to_string())
+                );
             },
-            BackendMessageAction::UpdateConfig(config) => {
+            FrontendToBackendMessage::UpdateConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
                     chatbot: config,
                     sfx: current_config.sfx,
                     tts: current_config.tts,
+                });
+                let _ = backend_tx.try_send(
+                    BackendToFrontendMessage::CreateLog(ui::LogLevel::INFO, "Chatbot config updated".to_string())
+                );
+            },
+            FrontendToBackendMessage::ConnectToChat(channel_name) => {
+                tokio::spawn(async move {
+                    handle_twitch_messages(channel_name).await;
                 });
             },
             _ => {
