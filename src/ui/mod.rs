@@ -13,7 +13,7 @@ enum Section {
     Settings,
 }
 #[derive(Debug)]
-pub enum BackendMessageAction {
+pub enum FrontendToBackendMessage {
     RemoveTTSLang(String),
     AddTTSLang(String),
     UpdateConfig (ChatbotConfig),
@@ -24,11 +24,13 @@ pub enum BackendMessageAction {
 }
 
 #[derive(Debug)]
-pub enum FrontendMessageAction {
-    GetTTSLangs,
-    GetTTSConfig(Config),
-    GetSfxConfig(Config),
-    GetSfxList,
+pub enum BackendToFrontendMessage {
+    ConnectionSuccess(String),
+    ConnectionFailure(String),
+    TTSLangListUpdated,
+    SFXListUpdated,   
+    ChatMessageReceived(String),
+    CreateLog(LogLevel, String),
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
@@ -50,7 +52,8 @@ struct ChatbotUILabels {
     connect_button: String,
 }
 
-enum LogLevel {
+#[derive(Debug)]
+pub enum LogLevel {
     INFO,
     WARN,
     ERROR,
@@ -79,8 +82,8 @@ pub struct ChatbotConfig {
 pub struct Chatbot {
     config: ChatbotConfig,
     selected_section: Section,
-    frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
-    frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
+    frontend_tx: tokio::sync::mpsc::Sender<FrontendToBackendMessage>,
+    frontend_rx: tokio::sync::mpsc::Receiver<BackendToFrontendMessage>,
     labels: ChatbotUILabels,
     log_messages: Vec<LogMessage>,
     sfx_config: Config,
@@ -90,8 +93,8 @@ pub struct Chatbot {
 impl Chatbot {
     pub fn new(
         config: ChatbotConfig,
-        frontend_tx: tokio::sync::mpsc::Sender<BackendMessageAction>,
-        frontend_rx: tokio::sync::mpsc::Receiver<FrontendMessageAction>,
+        frontend_tx: tokio::sync::mpsc::Sender<FrontendToBackendMessage>,
+        frontend_rx: tokio::sync::mpsc::Receiver<BackendToFrontendMessage>,
         sfx_config: Config,
         tts_config: Config,
     ) -> Self {
@@ -158,12 +161,14 @@ impl eframe::App for Chatbot {
 
         while let Ok(message) = self.frontend_rx.try_recv() {
             match message {
-                FrontendMessageAction::GetSfxConfig(config) => {
-                    println!("Getting sfx config {:?}", config);
-                }
-                FrontendMessageAction::GetTTSConfig(config) => {
-                    println!("Getting tts config {:?}", config);
-                }
+                BackendToFrontendMessage::ConnectionSuccess(response) => {
+                    self.labels.bot_status = response;
+                    self.labels.connect_button = "Disconnect".to_string();
+                },
+                BackendToFrontendMessage::ConnectionFailure(response) => {
+                    self.labels.bot_status = response;
+                    self.labels.connect_button = "Connect".to_string();
+                },
                 _ => {
                     println!("Received message");
                 }

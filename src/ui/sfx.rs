@@ -19,7 +19,7 @@ impl Chatbot {
                             self.sfx_config.enabled = true;
                         }
                         self.frontend_tx
-                            .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                            .try_send(super::FrontendToBackendMessage::UpdateSfxConfig(
                                 self.sfx_config.clone(),
                             ))
                             .unwrap();
@@ -29,7 +29,7 @@ impl Chatbot {
                 ui.label("SFX volume (0-1 range):");
                 if ui.add(egui::Slider::new(&mut self.sfx_config.volume, 0.0..=1.0)).drag_stopped() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateSfxConfig(
                             self.sfx_config.clone(),
                         ))
                         .unwrap();
@@ -41,7 +41,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateSfxConfig(
                             self.sfx_config.clone(),
                         ))
                         .unwrap();
@@ -51,7 +51,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateSfxConfig(
                             self.sfx_config.clone(),
                         ))
                         .unwrap();
@@ -61,7 +61,7 @@ impl Chatbot {
                     .changed()
                 {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateSfxConfig(
+                        .try_send(super::FrontendToBackendMessage::UpdateSfxConfig(
                             self.sfx_config.clone(),
                         ))
                         .unwrap();

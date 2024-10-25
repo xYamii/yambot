@@ -1,6 +1,6 @@
 use egui::Color32;
 
-use super::{BackendMessageAction, Chatbot, LogLevel, LogMessage};
+use super::{FrontendToBackendMessage, Chatbot, LogLevel, LogMessage};
 
 impl Chatbot {
     pub fn show_home(&mut self, ui: &mut egui::Ui) {
@@ -20,7 +20,7 @@ impl Chatbot {
                     self.labels.connect_button = "Disconnect".to_string();
                     let _ = self
                         .frontend_tx
-                        .try_send(BackendMessageAction::ConnectToChat(
+                        .try_send(FrontendToBackendMessage::ConnectToChat(
                             self.config.channel_name.clone(),
                         ))
                         .unwrap();
@@ -29,7 +29,7 @@ impl Chatbot {
                     self.labels.connect_button = "Connect".to_string();
                     let _ = self
                         .frontend_tx
-                        .try_send(BackendMessageAction::DisconnectFromChat(
+                        .try_send(FrontendToBackendMessage::DisconnectFromChat(
                             self.config.channel_name.clone(),
                         ))
                         .unwrap();
