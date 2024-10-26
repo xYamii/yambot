@@ -56,5 +56,12 @@ impl Chatbot {
                     ui.separator();
                 }
             });
+        // for testing purposes
+        if ui.button("test".to_string()).clicked() {
+            let _ = self
+                .frontend_tx
+                .try_send(FrontendToBackendMessage::PlaySound("test.wav".to_string()))
+                .unwrap();
+        }
     }
 }
