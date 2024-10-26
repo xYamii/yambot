@@ -1,11 +1,17 @@
 use backend::config::AppConfig;
 use eframe::egui::{ self };
+use rodio::{ OutputStreamHandle, Sink };
 use serde::{ Deserialize, Serialize };
 use ui::{ BackendToFrontendMessage, FrontendToBackendMessage };
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
 use twitch_irc::TwitchIRCClient;
 use twitch_irc::{ ClientConfig, SecureTCPTransport };
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+use std::sync::Arc;
+use rodio::{ Decoder, OutputStream };
 
 pub mod ui;
 pub mod backend;
@@ -47,10 +53,12 @@ async fn main() {
             .with_resizable(false),
         ..Default::default()
     };
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let config = backend::config::load_config();
     tokio::spawn(async move {
-        handle_frontend_to_backend_messages(backend_rx, backend_tx.clone()).await;
+        handle_frontend_to_backend_messages(backend_rx, backend_tx.clone(), stream_handle).await;
     });
+
     let _ = eframe::run_native(
         "Yambot",
         native_options,
@@ -114,8 +122,11 @@ async fn handle_twitch_messages(channel_name: String) {
 }
 async fn handle_frontend_to_backend_messages(
     mut backend_rx: tokio::sync::mpsc::Receiver<FrontendToBackendMessage>,
-    backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>
+    backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+    stream_handle: rodio::OutputStreamHandle
 ) {
+    let stream_handle = Arc::new(stream_handle);
+
     while let Some(message) = backend_rx.recv().await {
         match message {
             FrontendToBackendMessage::UpdateTTSConfig(config) => {
@@ -171,9 +182,27 @@ async fn handle_frontend_to_backend_messages(
                     handle_twitch_messages(channel_name).await;
                 });
             }
+            FrontendToBackendMessage::PlaySound(sound_file) => {
+                let stream_handle_clone = stream_handle.clone();
+                tokio::spawn(async move {
+                    play_sound(sound_file, stream_handle_clone).await;
+                });
+            }
             _ => {
                 println!("Received other message: {:?}", message);
             }
         }
+    }
+}
+async fn play_sound(sound_file: String, stream_handle: Arc<OutputStreamHandle>) {
+    let sound_path = "./assets/sounds/".to_string() + &sound_file;
+    if let Ok(file) = File::open(Path::new(&sound_path)) {
+        let source = Decoder::new(BufReader::new(file)).unwrap();
+        let sink = Sink::try_new(&*stream_handle).unwrap();
+        sink.set_volume(0.5);
+        sink.append(source);
+        sink.detach();
+    } else {
+        println!("Could not open sound file: {}", sound_path);
     }
 }

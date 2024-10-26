@@ -21,6 +21,7 @@ pub enum FrontendToBackendMessage {
     UpdateTTSConfig(Config),
     ConnectToChat(String),
     DisconnectFromChat(String),
+    PlaySound(String),
 }
 
 #[derive(Debug)]
