@@ -1,5 +1,5 @@
-use egui::{CentralPanel, Color32, TopBottomPanel};
-use serde::{Deserialize, Serialize};
+use egui::{ CentralPanel, Color32, TopBottomPanel };
+use serde::{ Deserialize, Serialize };
 
 pub mod sfx;
 pub mod home;
@@ -16,7 +16,7 @@ enum Section {
 pub enum FrontendToBackendMessage {
     RemoveTTSLang(String),
     AddTTSLang(String),
-    UpdateConfig (ChatbotConfig),
+    UpdateConfig(ChatbotConfig),
     UpdateSfxConfig(Config),
     UpdateTTSConfig(Config),
     ConnectToChat(String),
@@ -28,7 +28,7 @@ pub enum BackendToFrontendMessage {
     ConnectionSuccess(String),
     ConnectionFailure(String),
     TTSLangListUpdated,
-    SFXListUpdated,   
+    SFXListUpdated,
     ChatMessageReceived(String),
     CreateLog(LogLevel, String),
 }
@@ -96,7 +96,7 @@ impl Chatbot {
         frontend_tx: tokio::sync::mpsc::Sender<FrontendToBackendMessage>,
         frontend_rx: tokio::sync::mpsc::Receiver<BackendToFrontendMessage>,
         sfx_config: Config,
-        tts_config: Config,
+        tts_config: Config
     ) -> Self {
         Self {
             config,
@@ -109,12 +109,9 @@ impl Chatbot {
             },
             log_messages: Vec::new(),
             sfx_config,
-            tts_config
+            tts_config,
         }
     }
-
-
-    
 }
 
 impl eframe::App for Chatbot {
@@ -145,11 +142,13 @@ impl eframe::App for Chatbot {
             });
         });
 
-        CentralPanel::default().show(ctx, |ui| match self.selected_section {
-            Section::Home => self.show_home(ui),
-            Section::Sfx => self.show_sfx(ui),
-            Section::Tts => self.show_tts(ui),
-            Section::Settings => self.show_settings(ui),
+        CentralPanel::default().show(ctx, |ui| {
+            match self.selected_section {
+                Section::Home => self.show_home(ui),
+                Section::Sfx => self.show_sfx(ui),
+                Section::Tts => self.show_tts(ui),
+                Section::Settings => self.show_settings(ui),
+            }
         });
 
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
@@ -164,11 +163,11 @@ impl eframe::App for Chatbot {
                 BackendToFrontendMessage::ConnectionSuccess(response) => {
                     self.labels.bot_status = response;
                     self.labels.connect_button = "Disconnect".to_string();
-                },
+                }
                 BackendToFrontendMessage::ConnectionFailure(response) => {
                     self.labels.bot_status = response;
                     self.labels.connect_button = "Connect".to_string();
-                },
+                }
                 _ => {
                     println!("Received message");
                 }
