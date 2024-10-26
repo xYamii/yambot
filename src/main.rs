@@ -194,7 +194,6 @@ async fn handle_frontend_to_backend_messages(
         }
     }
 }
-
 async fn play_sound(sound_file: String, stream_handle: Arc<OutputStreamHandle>) {
     let sound_path = "./assets/sounds/".to_string() + &sound_file;
     if let Ok(file) = File::open(Path::new(&sound_path)) {
