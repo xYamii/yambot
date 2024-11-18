@@ -1,15 +1,16 @@
 use backend::config::AppConfig;
 use eframe::egui::{self};
 use serde::{Deserialize, Serialize};
-use ui::BackendMessageAction;
 use std::sync::{Arc, Mutex};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
 use twitch_irc::TwitchIRCClient;
 use twitch_irc::{ClientConfig, SecureTCPTransport};
+use ui::BackendMessageAction;
 
-pub mod ui;
 pub mod backend;
+pub mod ui;
+use log::{error, info};
 
 const WINDOW_WIDTH: f32 = 800.0;
 const WINDOW_HEIGHT: f32 = 600.0;
@@ -40,6 +41,7 @@ impl From<PrivmsgMessage> for ChatMessage {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let (backend_tx, frontend_rx) = tokio::sync::mpsc::channel(100);
     let (frontend_tx, backend_rx) = tokio::sync::mpsc::channel(100);
     let native_options = eframe::NativeOptions {
@@ -52,6 +54,7 @@ async fn main() {
     tokio::spawn(async move {
         handle_backend_messages(backend_rx).await;
     });
+    info!("Starting chatbot");
     let _ = eframe::run_native(
         "Yambot",
         native_options,
@@ -70,7 +73,8 @@ async fn main() {
                 config.tts,
             )))
         }),
-    );
+    )
+    .map_err(|e| error!("Error: {:?}", e));
 }
 
 async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessage>>>) {
@@ -104,7 +108,9 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
         }
     }
 }
-async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<BackendMessageAction>) {
+async fn handle_backend_messages(
+    mut backend_rx: tokio::sync::mpsc::Receiver<BackendMessageAction>,
+) {
     while let Some(message) = backend_rx.recv().await {
         match message {
             BackendMessageAction::UpdateTTSConfig(config) => {
@@ -114,7 +120,7 @@ async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<Bac
                     sfx: current_config.sfx,
                     tts: config,
                 });
-            },
+            }
             BackendMessageAction::UpdateSfxConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
@@ -122,7 +128,7 @@ async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<Bac
                     sfx: config,
                     tts: current_config.tts,
                 });
-            },
+            }
             BackendMessageAction::UpdateConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(&AppConfig {
@@ -130,11 +136,10 @@ async fn handle_backend_messages(mut backend_rx: tokio::sync::mpsc::Receiver<Bac
                     sfx: current_config.sfx,
                     tts: current_config.tts,
                 });
-            },
+            }
             _ => {
                 println!("Received other message: {:?}", message);
             }
-            
         }
     }
 }
