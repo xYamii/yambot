@@ -1,20 +1,21 @@
 use backend::config::AppConfig;
-use eframe::egui::{ self };
-use rodio::{ OutputStreamHandle, Sink };
-use serde::{ Deserialize, Serialize };
-use ui::{ BackendToFrontendMessage, FrontendToBackendMessage };
-use twitch_irc::login::StaticLoginCredentials;
-use twitch_irc::message::PrivmsgMessage;
-use twitch_irc::TwitchIRCClient;
-use twitch_irc::{ ClientConfig, SecureTCPTransport };
+use eframe::egui::{self};
+use rodio::{Decoder, OutputStream};
+use rodio::{OutputStreamHandle, Sink};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
-use rodio::{ Decoder, OutputStream };
+use twitch_irc::login::StaticLoginCredentials;
+use twitch_irc::message::PrivmsgMessage;
+use twitch_irc::TwitchIRCClient;
+use twitch_irc::{ClientConfig, SecureTCPTransport};
+use ui::{BackendToFrontendMessage, FrontendToBackendMessage};
 
-pub mod ui;
 pub mod backend;
+pub mod ui;
+use log::{error, info};
 
 const WINDOW_WIDTH: f32 = 800.0;
 const WINDOW_HEIGHT: f32 = 600.0;
@@ -29,7 +30,8 @@ pub struct ChatMessage {
 
 impl From<PrivmsgMessage> for ChatMessage {
     fn from(privmsg: PrivmsgMessage) -> Self {
-        let badges = privmsg.badges
+        let badges = privmsg
+            .badges
             .into_iter()
             .map(|badge| format!("{}-{}", badge.name, badge.version))
             .collect();
@@ -44,11 +46,11 @@ impl From<PrivmsgMessage> for ChatMessage {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let (backend_tx, frontend_rx) = tokio::sync::mpsc::channel(100);
     let (frontend_tx, backend_rx) = tokio::sync::mpsc::channel(100);
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder
-            ::default()
+        viewport: egui::ViewportBuilder::default()
             .with_inner_size([WINDOW_WIDTH, WINDOW_HEIGHT])
             .with_resizable(false),
         ..Default::default()
@@ -58,7 +60,7 @@ async fn main() {
     tokio::spawn(async move {
         handle_frontend_to_backend_messages(backend_rx, backend_tx.clone(), stream_handle).await;
     });
-
+    info!("Starting chatbot");
     let _ = eframe::run_native(
         "Yambot",
         native_options,
@@ -69,29 +71,24 @@ async fn main() {
             });
             egui_extras::install_image_loaders(&cc.egui_ctx);
             // read values from env or other config file that will be updated later on
-            Ok(
-                Box::new(
-                    ui::Chatbot::new(
-                        config.chatbot,
-                        frontend_tx,
-                        frontend_rx,
-                        config.sfx,
-                        config.tts
-                    )
-                )
-            )
-        })
-    );
+            Ok(Box::new(ui::Chatbot::new(
+                config.chatbot,
+                frontend_tx,
+                frontend_rx,
+                config.sfx,
+                config.tts,
+            )))
+        }),
+    )
+    .map_err(|e| error!("Error: {:?}", e));
 }
 
 async fn handle_twitch_messages(channel_name: String) {
     // TODO: add messages to local db
     let mut messages: Vec<ChatMessage> = Vec::new();
     let config: ClientConfig<StaticLoginCredentials> = ClientConfig::default();
-    let (mut incoming_messages, client) = TwitchIRCClient::<
-        SecureTCPTransport,
-        StaticLoginCredentials
-    >::new(config);
+    let (mut incoming_messages, client) =
+        TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
     client.join(channel_name.clone()).unwrap();
 
     while let Some(message) = incoming_messages.recv().await {
@@ -110,8 +107,7 @@ async fn handle_twitch_messages(channel_name: String) {
             twitch_irc::message::ServerMessage::Whisper(whisper_message) => {
                 println!(
                     "User {}, whispered message {}",
-                    whisper_message.sender.login,
-                    whisper_message.message_text
+                    whisper_message.sender.login, whisper_message.message_text
                 );
             }
             _ => {
@@ -123,7 +119,7 @@ async fn handle_twitch_messages(channel_name: String) {
 async fn handle_frontend_to_backend_messages(
     mut backend_rx: tokio::sync::mpsc::Receiver<FrontendToBackendMessage>,
     backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
-    stream_handle: rodio::OutputStreamHandle
+    stream_handle: rodio::OutputStreamHandle,
 ) {
     let stream_handle = Arc::new(stream_handle);
 
@@ -136,14 +132,12 @@ async fn handle_frontend_to_backend_messages(
                         chatbot: current_config.chatbot,
                         sfx: current_config.sfx,
                         tts: config,
-                    })
+                    }),
                 );
-                let _ = backend_tx.try_send(
-                    BackendToFrontendMessage::CreateLog(
-                        ui::LogLevel::INFO,
-                        "TTS config updated".to_string()
-                    )
-                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "TTS config updated".to_string(),
+                ));
             }
             FrontendToBackendMessage::UpdateSfxConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
@@ -152,14 +146,12 @@ async fn handle_frontend_to_backend_messages(
                         chatbot: current_config.chatbot,
                         sfx: config,
                         tts: current_config.tts,
-                    })
+                    }),
                 );
-                let _ = backend_tx.try_send(
-                    BackendToFrontendMessage::CreateLog(
-                        ui::LogLevel::INFO,
-                        "SFX config updated".to_string()
-                    )
-                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "SFX config updated".to_string(),
+                ));
             }
             FrontendToBackendMessage::UpdateConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
@@ -168,24 +160,16 @@ async fn handle_frontend_to_backend_messages(
                         chatbot: config,
                         sfx: current_config.sfx,
                         tts: current_config.tts,
-                    })
+                    }),
                 );
-                let _ = backend_tx.try_send(
-                    BackendToFrontendMessage::CreateLog(
-                        ui::LogLevel::INFO,
-                        "Chatbot config updated".to_string()
-                    )
-                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "Chatbot config updated".to_string(),
+                ));
             }
             FrontendToBackendMessage::ConnectToChat(channel_name) => {
                 tokio::spawn(async move {
                     handle_twitch_messages(channel_name).await;
-                });
-            }
-            FrontendToBackendMessage::PlaySound(sound_file) => {
-                let stream_handle_clone = stream_handle.clone();
-                tokio::spawn(async move {
-                    play_sound(sound_file, stream_handle_clone).await;
                 });
             }
             _ => {
@@ -194,6 +178,7 @@ async fn handle_frontend_to_backend_messages(
         }
     }
 }
+
 async fn play_sound(sound_file: String, stream_handle: Arc<OutputStreamHandle>) {
     let sound_path = "./assets/sounds/".to_string() + &sound_file;
     if let Ok(file) = File::open(Path::new(&sound_path)) {

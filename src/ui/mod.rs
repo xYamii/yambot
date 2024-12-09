@@ -1,10 +1,10 @@
 use egui::{ CentralPanel, Color32, TopBottomPanel };
 use serde::{ Deserialize, Serialize };
 
-pub mod sfx;
 pub mod home;
-pub mod tts;
 pub mod settings;
+pub mod sfx;
+pub mod tts;
 
 enum Section {
     Home,
