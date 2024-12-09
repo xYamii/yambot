@@ -1,12 +1,17 @@
 use backend::config::AppConfig;
 use eframe::egui::{self};
+use rodio::{Decoder, OutputStream};
+use rodio::{OutputStreamHandle, Sink};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+use std::sync::Arc;
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::PrivmsgMessage;
 use twitch_irc::TwitchIRCClient;
 use twitch_irc::{ClientConfig, SecureTCPTransport};
-use ui::BackendMessageAction;
+use ui::{BackendToFrontendMessage, FrontendToBackendMessage};
 
 pub mod backend;
 pub mod ui;
@@ -50,9 +55,10 @@ async fn main() {
             .with_resizable(false),
         ..Default::default()
     };
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let config = backend::config::load_config();
     tokio::spawn(async move {
-        handle_backend_messages(backend_rx).await;
+        handle_frontend_to_backend_messages(backend_rx, backend_tx.clone(), stream_handle).await;
     });
     info!("Starting chatbot");
     let _ = eframe::run_native(
@@ -77,7 +83,9 @@ async fn main() {
     .map_err(|e| error!("Error: {:?}", e));
 }
 
-async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessage>>>) {
+async fn handle_twitch_messages(channel_name: String) {
+    // TODO: add messages to local db
+    let mut messages: Vec<ChatMessage> = Vec::new();
     let config: ClientConfig<StaticLoginCredentials> = ClientConfig::default();
     let (mut incoming_messages, client) =
         TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
@@ -88,7 +96,7 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
             twitch_irc::message::ServerMessage::Privmsg(privmsg) => {
                 let chat_message: ChatMessage = privmsg.into();
                 println!("Message: {:?}", chat_message);
-                messages.lock().unwrap().push(chat_message);
+                messages.push(chat_message);
             }
             twitch_irc::message::ServerMessage::Join(join_msg) => {
                 println!("User joined: {}", join_msg.user_login);
@@ -108,38 +116,78 @@ async fn handle_messages(channel_name: String, messages: Arc<Mutex<Vec<ChatMessa
         }
     }
 }
-async fn handle_backend_messages(
-    mut backend_rx: tokio::sync::mpsc::Receiver<BackendMessageAction>,
+async fn handle_frontend_to_backend_messages(
+    mut backend_rx: tokio::sync::mpsc::Receiver<FrontendToBackendMessage>,
+    backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+    stream_handle: rodio::OutputStreamHandle,
 ) {
+    let stream_handle = Arc::new(stream_handle);
+
     while let Some(message) = backend_rx.recv().await {
         match message {
-            BackendMessageAction::UpdateTTSConfig(config) => {
+            FrontendToBackendMessage::UpdateTTSConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
-                backend::config::save_config(&AppConfig {
-                    chatbot: current_config.chatbot,
-                    sfx: current_config.sfx,
-                    tts: config,
-                });
+                backend::config::save_config(
+                    &(AppConfig {
+                        chatbot: current_config.chatbot,
+                        sfx: current_config.sfx,
+                        tts: config,
+                    }),
+                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "TTS config updated".to_string(),
+                ));
             }
-            BackendMessageAction::UpdateSfxConfig(config) => {
+            FrontendToBackendMessage::UpdateSfxConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
-                backend::config::save_config(&AppConfig {
-                    chatbot: current_config.chatbot,
-                    sfx: config,
-                    tts: current_config.tts,
-                });
+                backend::config::save_config(
+                    &(AppConfig {
+                        chatbot: current_config.chatbot,
+                        sfx: config,
+                        tts: current_config.tts,
+                    }),
+                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "SFX config updated".to_string(),
+                ));
             }
-            BackendMessageAction::UpdateConfig(config) => {
+            FrontendToBackendMessage::UpdateConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
-                backend::config::save_config(&AppConfig {
-                    chatbot: config,
-                    sfx: current_config.sfx,
-                    tts: current_config.tts,
+                backend::config::save_config(
+                    &(AppConfig {
+                        chatbot: config,
+                        sfx: current_config.sfx,
+                        tts: current_config.tts,
+                    }),
+                );
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "Chatbot config updated".to_string(),
+                ));
+            }
+            FrontendToBackendMessage::ConnectToChat(channel_name) => {
+                tokio::spawn(async move {
+                    handle_twitch_messages(channel_name).await;
                 });
             }
             _ => {
                 println!("Received other message: {:?}", message);
             }
         }
+    }
+}
+
+async fn play_sound(sound_file: String, stream_handle: Arc<OutputStreamHandle>) {
+    let sound_path = "./assets/sounds/".to_string() + &sound_file;
+    if let Ok(file) = File::open(Path::new(&sound_path)) {
+        let source = Decoder::new(BufReader::new(file)).unwrap();
+        let sink = Sink::try_new(&*stream_handle).unwrap();
+        sink.set_volume(0.5);
+        sink.append(source);
+        sink.detach();
+    } else {
+        println!("Could not open sound file: {}", sound_path);
     }
 }

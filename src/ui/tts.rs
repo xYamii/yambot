@@ -7,19 +7,18 @@ impl Chatbot {
             ui.vertical(|ui| {
                 ui.horizontal(|ui: &mut egui::Ui| {
                     ui.label("TTS status: ");
-                    if ui
-                        .button(if self.tts_config.enabled { "ON" } else { "OFF" })
-                        .clicked()
-                    {
+                    if ui.button(if self.tts_config.enabled { "ON" } else { "OFF" }).clicked() {
                         if self.tts_config.enabled {
                             self.tts_config.enabled = false;
                         } else {
                             self.tts_config.enabled = true;
                         }
                         self.frontend_tx
-                            .try_send(super::BackendMessageAction::UpdateTTSConfig(
-                                self.tts_config.clone(),
-                            ))
+                            .try_send(
+                                super::FrontendToBackendMessage::UpdateTTSConfig(
+                                    self.tts_config.clone()
+                                )
+                            )
                             .unwrap();
                     }
                 });
@@ -28,43 +27,42 @@ impl Chatbot {
                 // funny cus this returns giant floating point numbers
                 if ui.add(egui::Slider::new(&mut self.tts_config.volume, 0.0..=1.0)).drag_stopped() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
-                            self.tts_config.clone(),
-                        ))
+                        .try_send(
+                            super::FrontendToBackendMessage::UpdateTTSConfig(
+                                self.tts_config.clone()
+                            )
+                        )
                         .unwrap();
-                };
+                }
                 ui.add_space(10.0);
                 ui.label("TTS permissions:");
-                if ui
-                    .checkbox(&mut self.tts_config.permited_roles.subs, "Subs")
-                    .changed()
-                {
+                if ui.checkbox(&mut self.tts_config.permited_roles.subs, "Subs").changed() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
-                            self.tts_config.clone(),
-                        ))
+                        .try_send(
+                            super::FrontendToBackendMessage::UpdateTTSConfig(
+                                self.tts_config.clone()
+                            )
+                        )
                         .unwrap();
-                };
-                if ui
-                    .checkbox(&mut self.tts_config.permited_roles.vips, "VIPS")
-                    .changed()
-                {
+                }
+                if ui.checkbox(&mut self.tts_config.permited_roles.vips, "VIPS").changed() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
-                            self.tts_config.clone(),
-                        ))
+                        .try_send(
+                            super::FrontendToBackendMessage::UpdateTTSConfig(
+                                self.tts_config.clone()
+                            )
+                        )
                         .unwrap();
-                };
-                if ui
-                    .checkbox(&mut self.tts_config.permited_roles.mods, "Mods")
-                    .changed()
-                {
+                }
+                if ui.checkbox(&mut self.tts_config.permited_roles.mods, "Mods").changed() {
                     self.frontend_tx
-                        .try_send(super::BackendMessageAction::UpdateTTSConfig(
-                            self.tts_config.clone(),
-                        ))
+                        .try_send(
+                            super::FrontendToBackendMessage::UpdateTTSConfig(
+                                self.tts_config.clone()
+                            )
+                        )
                         .unwrap();
-                };
+                }
                 ui.add_space(350.0);
             });
             ui.add_space(250.0);
@@ -72,7 +70,8 @@ impl Chatbot {
             ui.vertical(|ui| {
                 ui.set_height(ui.available_height());
                 let available_height = ui.available_height();
-                let table = egui_extras::TableBuilder::new(ui)
+                let table = egui_extras::TableBuilder
+                    ::new(ui)
                     .striped(true)
                     .resizable(false)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))

@@ -1,9 +1,8 @@
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use std::fs;
 use std::path::Path;
 
-use crate::ui::{ChatbotConfig, Config};
-
+use crate::ui::{ ChatbotConfig, Config };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
