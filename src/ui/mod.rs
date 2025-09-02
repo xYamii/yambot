@@ -78,6 +78,7 @@ struct LogMessage {
 pub struct ChatbotConfig {
     pub channel_name: String,
     pub auth_token: String,
+    pub sound_format: crate::backend::sfx::Format,
 }
 
 pub struct Chatbot {
