@@ -1,3 +1,4 @@
+use crate::backend::sfx::SoundsManager;
 use backend::config::AppConfig;
 use eframe::egui::{self};
 use rodio::{Decoder, OutputStream};
@@ -55,8 +56,13 @@ async fn main() {
             .with_resizable(false),
         ..Default::default()
     };
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let config = backend::config::load_config();
+
+    let sounds_manager = SoundsManager::new()
+        .await
+        .expect("Sound manager initialization");
+
+    let (_stream, stream_handle) = sounds_manager.get_stream();
     tokio::spawn(async move {
         handle_frontend_to_backend_messages(backend_rx, backend_tx.clone(), stream_handle).await;
     });

@@ -1,6 +1,7 @@
 use egui::Color32;
 
 use super::Chatbot;
+use crate::backend::sfx::FILES;
 
 impl Chatbot {
     pub fn show_sfx(&mut self, ui: &mut egui::Ui) {
@@ -73,16 +74,16 @@ impl Chatbot {
                 ui.heading(
                     egui::widget_text::RichText::new("Available sounds").color(Color32::WHITE)
                 );
-                egui::ScrollArea
-                    ::vertical()
+                let files = FILES.lock().unwrap();
+                egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 100.0)
                     .max_width(ui.available_width())
                     .auto_shrink(false)
                     .show(ui, |ui| {
-                        for i in 0..100 {
+                        for (i, file) in files.iter().enumerate() {
                             ui.horizontal(|ui| {
-                                ui.label(i.to_string());
-                                ui.label("sound name");
+                                ui.label((i + 1).to_string());
+                                ui.label(file);
                             });
                             ui.separator();
                         }
