@@ -477,6 +477,8 @@ async fn handle_frontend_to_backend_messages(
     audio_tx: SoundPlaybackSender,
     command_registry: Arc<RwLock<CommandRegistry>>,
 ) {
+    // Store the handle to the twitch message handler task so we can abort it on disconnect
+    let mut twitch_task_handle: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(message) = backend_rx.recv().await {
         match message {
             FrontendToBackendMessage::UpdateTTSConfig(config) => {
@@ -522,6 +524,15 @@ async fn handle_frontend_to_backend_messages(
                 ));
             }
             FrontendToBackendMessage::ConnectToChat(_channel_name) => {
+                // Abort any existing connection first
+                if let Some(handle) = twitch_task_handle.take() {
+                    handle.abort();
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        "Disconnecting previous session...".to_string(),
+                    ));
+                }
+
                 // Load config to get auth_token and client_id
                 let config = backend::config::load_config();
                 let twitch_config = TwitchConfig {
@@ -540,7 +551,9 @@ async fn handle_frontend_to_backend_messages(
                 let backend_tx_clone = backend_tx.clone();
                 let audio_tx_clone = audio_tx.clone();
                 let registry_clone = command_registry.clone();
-                tokio::spawn(async move {
+
+                // Spawn the twitch handler task and store the handle
+                let handle = tokio::spawn(async move {
                     handle_twitch_messages(
                         twitch_config,
                         backend_tx_clone,
@@ -550,6 +563,7 @@ async fn handle_frontend_to_backend_messages(
                     )
                     .await;
                 });
+                twitch_task_handle = Some(handle);
 
                 let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
                     ui::LogLevel::INFO,
@@ -604,6 +618,21 @@ async fn handle_frontend_to_backend_messages(
                             trigger,
                             if enabled { "enabled" } else { "disabled" }
                         ),
+                    ));
+                }
+            }
+            FrontendToBackendMessage::DisconnectFromChat(_channel_name) => {
+                // Abort the twitch message handler task if it's running
+                if let Some(handle) = twitch_task_handle.take() {
+                    handle.abort();
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        "Disconnected from Twitch".to_string(),
+                    ));
+                } else {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::WARN,
+                        "Not connected to Twitch".to_string(),
                     ));
                 }
             }
