@@ -43,9 +43,9 @@ pub enum BackendToFrontendMessage {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     // https://github.com/emilk/egui/discussions/4670
-    volume: f64,
-    enabled: bool,
-    permited_roles: PermitedRoles,
+    pub volume: f64,
+    pub enabled: bool,
+    pub permited_roles: PermitedRoles,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

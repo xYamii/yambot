@@ -17,14 +17,21 @@ pub mod backend;
 pub mod ui;
 use log::{error, info};
 
+// Sound playback request with file name and volume
+#[derive(Debug, Clone)]
+struct SoundPlaybackRequest {
+    sound_file: String,
+    volume: f32,
+}
+
 // Channel for sending sound playback requests
 // Using std::sync::mpsc::Sender wrapped for compatibility with async code
 #[derive(Clone)]
-struct SoundPlaybackSender(std::sync::mpsc::Sender<String>);
+struct SoundPlaybackSender(std::sync::mpsc::Sender<SoundPlaybackRequest>);
 
 impl SoundPlaybackSender {
-    fn send(&self, sound: String) -> Result<(), std::sync::mpsc::SendError<String>> {
-        self.0.send(sound)
+    fn send(&self, sound: String, volume: f32) -> Result<(), std::sync::mpsc::SendError<SoundPlaybackRequest>> {
+        self.0.send(SoundPlaybackRequest { sound_file: sound, volume })
     }
 }
 
@@ -74,12 +81,17 @@ async fn main() {
     let config = backend::config::load_config();
     let command_registry = backend::config::load_commands();
 
+    // Initialize SoundsManager to start file watching
+    let _sounds_manager = backend::sfx::SoundsManager::new()
+        .await
+        .expect("Failed to initialize SoundsManager");
+
     // Wrap command registry in Arc<RwLock> for sharing across tasks
     let shared_registry = Arc::new(RwLock::new(command_registry));
 
     // Create audio playback channel and spawn dedicated audio task in a blocking thread
     // This solves the OutputStream Send issue on macOS by creating OutputStream in a dedicated thread
-    let (audio_tx, audio_rx) = std::sync::mpsc::channel::<String>();
+    let (audio_tx, audio_rx) = std::sync::mpsc::channel::<SoundPlaybackRequest>();
     let audio_tx = SoundPlaybackSender(audio_tx);
     std::thread::spawn(move || {
         // Create the OutputStream inside the thread to avoid Send issues on macOS
@@ -249,10 +261,7 @@ async fn handle_twitch_messages(
                         match result {
                             CommandResult::Success(Some(action)) => {
                                 // Parse the action and handle it
-                                if let Some(play_sound) = action.strip_prefix("play_sound:") {
-                                    // Play sound directly on backend via audio channel
-                                    let _ = audio_tx.send(play_sound.to_string());
-                                } else if let Some(send_msg) = action.strip_prefix("send:") {
+                                if let Some(send_msg) = action.strip_prefix("send:") {
                                     if let Err(e) = client.send_message(send_msg).await {
                                         let _ = backend_tx
                                             .send(BackendToFrontendMessage::CreateLog(
@@ -297,7 +306,26 @@ async fn handle_twitch_messages(
                                     .await;
                             }
                             CommandResult::NotFound => {
-                                // Command not found, ignore silently
+                                // Check if there's a sound file with this name
+                                let sound_format = backend::sfx::Soundlist::get_format();
+                                let sound_path = format!("./assets/sounds/{}.{}", context.command_name, sound_format);
+
+                                if std::path::Path::new(&sound_path).exists() {
+                                    // Check if user has permission to play sounds
+                                    let config = backend::config::load_config();
+                                    let has_permission = context.badges().iter().any(|badge| {
+                                        (badge.set_id == "subscriber" || badge.set_id == "founder") && config.sfx.permited_roles.subs
+                                            || badge.set_id == "vip" && config.sfx.permited_roles.vips
+                                            || badge.set_id == "moderator" && config.sfx.permited_roles.mods
+                                            || badge.set_id == "broadcaster"
+                                    });
+
+                                    if has_permission && config.sfx.enabled {
+                                        // Play the sound with volume from sfx config
+                                        let sound_file = format!("{}.{}", context.command_name, sound_format);
+                                        let _ = audio_tx.send(sound_file, config.sfx.volume as f32);
+                                    }
+                                }
                             }
                             CommandResult::PermissionDenied => {
                                 let _ = backend_tx
@@ -588,13 +616,13 @@ async fn handle_frontend_to_backend_messages(
 
 // Dedicated audio playback task that owns the OutputStream
 // This solves the Send issue on macOS by keeping OutputStream in a single blocking thread
-fn audio_playback_task(rx: std::sync::mpsc::Receiver<String>, stream: OutputStream) {
-    while let Ok(sound_file) = rx.recv() {
-        let sound_path = "./assets/sounds/".to_string() + &sound_file;
+fn audio_playback_task(rx: std::sync::mpsc::Receiver<SoundPlaybackRequest>, stream: OutputStream) {
+    while let Ok(request) = rx.recv() {
+        let sound_path = "./assets/sounds/".to_string() + &request.sound_file;
         if let Ok(file) = File::open(Path::new(&sound_path)) {
             if let Ok(source) = Decoder::new(BufReader::new(file)) {
                 let sink = Sink::connect_new(stream.mixer());
-                sink.set_volume(0.5);
+                sink.set_volume(request.volume);
                 sink.append(source);
                 sink.detach();
             } else {
