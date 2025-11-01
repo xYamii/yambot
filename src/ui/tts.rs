@@ -84,7 +84,7 @@ impl Chatbot {
                 table
                     .header(20.0, |mut header| {
                         header.col(|ui| {
-                            ui.strong("No.");
+                            ui.strong("Code");
                         });
                         header.col(|ui| {
                             ui.strong("Language name");
@@ -94,17 +94,37 @@ impl Chatbot {
                         });
                     })
                     .body(|mut body| {
-                        for row_index in 1..100 {
+                        let languages = self.tts_languages.clone();
+                        for language in languages.iter() {
                             let row_height = 18.0;
                             body.row(row_height, |mut row| {
                                 row.col(|ui| {
-                                    ui.label(row_index.to_string());
+                                    ui.label(&language.code);
                                 });
                                 row.col(|ui| {
-                                    ui.label("test");
+                                    ui.label(&language.name);
                                 });
                                 row.col(|ui| {
-                                    ui.checkbox(&mut false, "");
+                                    let mut enabled = language.enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        if enabled {
+                                            self.frontend_tx
+                                                .try_send(
+                                                    super::FrontendToBackendMessage::AddTTSLang(
+                                                        language.code.clone()
+                                                    )
+                                                )
+                                                .unwrap();
+                                        } else {
+                                            self.frontend_tx
+                                                .try_send(
+                                                    super::FrontendToBackendMessage::RemoveTTSLang(
+                                                        language.code.clone()
+                                                    )
+                                                )
+                                                .unwrap();
+                                        }
+                                    }
                                 });
                             });
                         }

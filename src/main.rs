@@ -1,4 +1,5 @@
 use crate::backend::commands::{CommandExecutor, CommandParser, CommandRegistry, CommandResult};
+use crate::backend::tts::{LanguageConfig, TTSQueue, TTSQueueItem, TTSRequest, TTSService};
 use crate::backend::twitch::{
     ChatMessageEvent, TwitchClient, TwitchClientEvent, TwitchConfig, TwitchEvent,
 };
@@ -17,21 +18,30 @@ pub mod backend;
 pub mod ui;
 use log::{error, info};
 
-// Sound playback request with file name and volume
+// Audio playback request for SFX system
 #[derive(Debug, Clone)]
-struct SoundPlaybackRequest {
-    sound_file: String,
+struct AudioPlaybackRequest {
+    file_path: String,
     volume: f32,
+    is_full_path: bool,
 }
 
-// Channel for sending sound playback requests
+// Channel for sending audio playback requests
 // Using std::sync::mpsc::Sender wrapped for compatibility with async code
 #[derive(Clone)]
-struct SoundPlaybackSender(std::sync::mpsc::Sender<SoundPlaybackRequest>);
+struct AudioPlaybackSender(std::sync::mpsc::Sender<AudioPlaybackRequest>);
 
-impl SoundPlaybackSender {
-    fn send(&self, sound: String, volume: f32) -> Result<(), std::sync::mpsc::SendError<SoundPlaybackRequest>> {
-        self.0.send(SoundPlaybackRequest { sound_file: sound, volume })
+impl AudioPlaybackSender {
+    fn send_sound(
+        &self,
+        sound: String,
+        volume: f32,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioPlaybackRequest>> {
+        self.0.send(AudioPlaybackRequest {
+            file_path: sound,
+            volume,
+            is_full_path: false,
+        })
     }
 }
 
@@ -91,8 +101,8 @@ async fn main() {
 
     // Create audio playback channel and spawn dedicated audio task in a blocking thread
     // This solves the OutputStream Send issue on macOS by creating OutputStream in a dedicated thread
-    let (audio_tx, audio_rx) = std::sync::mpsc::channel::<SoundPlaybackRequest>();
-    let audio_tx = SoundPlaybackSender(audio_tx);
+    let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioPlaybackRequest>();
+    let audio_tx = AudioPlaybackSender(audio_tx);
     std::thread::spawn(move || {
         // Create the OutputStream inside the thread to avoid Send issues on macOS
         let stream = rodio::OutputStreamBuilder::open_default_stream()
@@ -100,14 +110,31 @@ async fn main() {
         audio_playback_task(audio_rx, stream);
     });
 
+    // Initialize TTS system
+    let tts_queue = TTSQueue::new();
+    let tts_service = Arc::new(TTSService::new(tts_queue.clone()));
+    let language_config = Arc::new(RwLock::new(backend::tts::load_language_config()));
+
+    // Start TTS player task using tokio
+    let tts_queue_for_player = tts_queue.clone();
+    tokio::spawn(async move {
+        tts_player_task(tts_queue_for_player).await;
+    });
+
     let registry_clone = shared_registry.clone();
     let audio_tx_clone = audio_tx.clone();
+    let tts_queue_clone = tts_queue.clone();
+    let tts_service_clone = tts_service.clone();
+    let language_config_clone = language_config.clone();
     tokio::spawn(async move {
         handle_frontend_to_backend_messages(
             backend_rx,
             backend_tx.clone(),
             audio_tx_clone,
             registry_clone,
+            tts_queue_clone,
+            tts_service_clone,
+            language_config_clone,
         )
         .await;
     });
@@ -117,6 +144,16 @@ async fn main() {
     let commands = {
         let registry = shared_registry.read().await;
         registry.list().iter().map(|c| (*c).clone()).collect()
+    };
+
+    // Get TTS languages for UI
+    let tts_languages = {
+        let lang_cfg = language_config.read().await;
+        lang_cfg
+            .get_all_languages()
+            .iter()
+            .map(|l| (*l).clone())
+            .collect()
     };
 
     let _ = eframe::run_native(
@@ -135,6 +172,7 @@ async fn main() {
                 frontend_rx,
                 config.sfx,
                 config.tts,
+                tts_languages,
                 commands,
             )))
         }),
@@ -145,8 +183,11 @@ async fn main() {
 async fn handle_twitch_messages(
     config: TwitchConfig,
     backend_tx: tokio::sync::mpsc::Sender<ui::BackendToFrontendMessage>,
-    audio_tx: SoundPlaybackSender,
+    audio_tx: AudioPlaybackSender,
     command_registry: Arc<RwLock<CommandRegistry>>,
+    tts_queue: TTSQueue,
+    tts_service: Arc<TTSService>,
+    language_config: Arc<RwLock<LanguageConfig>>,
     welcome_message: Option<String>,
 ) {
     // TODO: add messages to local db
@@ -245,6 +286,93 @@ async fn handle_twitch_messages(
             TwitchClientEvent::ChatEvent(chat_event) => match chat_event {
                 TwitchEvent::ChatMessage(msg) => {
                     let chat_message: ChatMessage = msg.clone().into();
+
+                    // Check if message is a TTS command (e.g., !en hello, !pl czesc)
+                    let message_text = msg.message.text.trim();
+                    if message_text.starts_with('!') && message_text.len() > 1 {
+                        let parts: Vec<&str> = message_text.splitn(2, ' ').collect();
+                        if parts.len() == 2 {
+                            let potential_lang_code = &parts[0][1..]; // Remove the '!' prefix
+                            let tts_text = parts[1];
+
+                            // Check if this is a valid language code
+                            let lang_config = language_config.read().await;
+                            if let Some(language) = lang_config.get_language(potential_lang_code) {
+                                if language.enabled {
+                                    // Check TTS config and permissions
+                                    let config = backend::config::load_config();
+                                    if config.tts.enabled {
+                                        // Check user permissions
+                                        let has_permission = msg.badges.iter().any(|badge| {
+                                            (badge.set_id == "subscriber"
+                                                || badge.set_id == "founder")
+                                                && config.tts.permited_roles.subs
+                                                || badge.set_id == "vip"
+                                                    && config.tts.permited_roles.vips
+                                                || badge.set_id == "moderator"
+                                                    && config.tts.permited_roles.mods
+                                                || badge.set_id == "broadcaster"
+                                        });
+
+                                        if !has_permission {
+                                            continue;
+                                        }
+                                        if tts_queue.is_user_ignored(&msg.chatter_user_login).await
+                                        {
+                                            continue;
+                                        }
+
+                                        let tts_request = TTSRequest {
+                                            id: msg.message_id.clone(),
+                                            username: msg.chatter_user_login.clone(),
+                                            language: potential_lang_code.to_string(),
+                                            text: tts_text.to_string(),
+                                            timestamp: chrono::Utc::now(),
+                                        };
+
+                                        // Generate TTS files asynchronously
+                                        let tts_service_clone = tts_service.clone();
+                                        let tts_queue_clone = tts_queue.clone();
+                                        let backend_tx_clone = backend_tx.clone();
+                                        let request_clone = tts_request.clone();
+
+                                        tokio::spawn(async move {
+                                            match tts_service_clone.process_request(&request_clone).await {
+                                                Ok(file_paths) => {
+                                                    // Add to queue with generated files
+                                                    let queue_item = TTSQueueItem {
+                                                        request: request_clone.clone(),
+                                                        file_paths,
+                                                    };
+                                                    tts_queue_clone.add(queue_item).await;
+
+                                                    let _ = backend_tx_clone
+                                                        .send(BackendToFrontendMessage::CreateLog(
+                                                            ui::LogLevel::INFO,
+                                                            format!("TTS queued: {} in {}", request_clone.text, request_clone.language),
+                                                        ))
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to generate TTS: {}", e);
+                                                    let _ = backend_tx_clone
+                                                        .send(BackendToFrontendMessage::CreateLog(
+                                                            ui::LogLevel::ERROR,
+                                                            format!("Failed to generate TTS: {}", e),
+                                                        ))
+                                                        .await;
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                                // If it's a valid language code, don't process as regular command
+                                messages.push(chat_message);
+                                continue;
+                            }
+                        }
+                    }
+
                     // Check if message is a command
                     if let Some(context) = command_parser.parse(msg.clone()) {
                         // Lock the registry and execute command
@@ -287,13 +415,6 @@ async fn handle_twitch_messages(
                                                 .await;
                                         }
                                     }
-                                } else if let Some(_tts_msg) = action.strip_prefix("tts:") {
-                                    let _ = backend_tx
-                                        .send(BackendToFrontendMessage::CreateLog(
-                                            ui::LogLevel::INFO,
-                                            "TTS not yet implemented".to_string(),
-                                        ))
-                                        .await;
                                 }
                             }
                             CommandResult::Success(None) => {}
@@ -308,22 +429,30 @@ async fn handle_twitch_messages(
                             CommandResult::NotFound => {
                                 // Check if there's a sound file with this name
                                 let sound_format = backend::sfx::Soundlist::get_format();
-                                let sound_path = format!("./assets/sounds/{}.{}", context.command_name, sound_format);
+                                let sound_path = format!(
+                                    "./assets/sounds/{}.{}",
+                                    context.command_name, sound_format
+                                );
 
                                 if std::path::Path::new(&sound_path).exists() {
                                     // Check if user has permission to play sounds
                                     let config = backend::config::load_config();
                                     let has_permission = context.badges().iter().any(|badge| {
-                                        (badge.set_id == "subscriber" || badge.set_id == "founder") && config.sfx.permited_roles.subs
-                                            || badge.set_id == "vip" && config.sfx.permited_roles.vips
-                                            || badge.set_id == "moderator" && config.sfx.permited_roles.mods
+                                        (badge.set_id == "subscriber" || badge.set_id == "founder")
+                                            && config.sfx.permited_roles.subs
+                                            || badge.set_id == "vip"
+                                                && config.sfx.permited_roles.vips
+                                            || badge.set_id == "moderator"
+                                                && config.sfx.permited_roles.mods
                                             || badge.set_id == "broadcaster"
                                     });
 
                                     if has_permission && config.sfx.enabled {
                                         // Play the sound with volume from sfx config
-                                        let sound_file = format!("{}.{}", context.command_name, sound_format);
-                                        let _ = audio_tx.send(sound_file, config.sfx.volume as f32);
+                                        let sound_file =
+                                            format!("{}.{}", context.command_name, sound_format);
+                                        let _ = audio_tx
+                                            .send_sound(sound_file, config.sfx.volume as f32);
                                     }
                                 }
                             }
@@ -474,13 +603,62 @@ async fn handle_twitch_messages(
 async fn handle_frontend_to_backend_messages(
     mut backend_rx: tokio::sync::mpsc::Receiver<FrontendToBackendMessage>,
     backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
-    audio_tx: SoundPlaybackSender,
+    audio_tx: AudioPlaybackSender,
     command_registry: Arc<RwLock<CommandRegistry>>,
+    tts_queue: TTSQueue,
+    tts_service: Arc<TTSService>,
+    language_config: Arc<RwLock<LanguageConfig>>,
 ) {
     // Store the handle to the twitch message handler task so we can abort it on disconnect
     let mut twitch_task_handle: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(message) = backend_rx.recv().await {
         match message {
+            FrontendToBackendMessage::AddTTSLang(lang_code) => {
+                let mut config = language_config.write().await;
+                config.enable_language(&lang_code);
+                if let Err(e) = backend::tts::save_language_config(&config) {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::ERROR,
+                        format!("Failed to save language config: {}", e),
+                    ));
+                } else {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        format!("Language {} enabled", lang_code),
+                    ));
+                    // Send updated language list to frontend
+                    let updated_langs = config
+                        .get_all_languages()
+                        .iter()
+                        .map(|l| (*l).clone())
+                        .collect();
+                    let _ = backend_tx
+                        .try_send(BackendToFrontendMessage::TTSLangListUpdated(updated_langs));
+                }
+            }
+            FrontendToBackendMessage::RemoveTTSLang(lang_code) => {
+                let mut config = language_config.write().await;
+                config.disable_language(&lang_code);
+                if let Err(e) = backend::tts::save_language_config(&config) {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::ERROR,
+                        format!("Failed to save language config: {}", e),
+                    ));
+                } else {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        format!("Language {} disabled", lang_code),
+                    ));
+                    // Send updated language list to frontend
+                    let updated_langs = config
+                        .get_all_languages()
+                        .iter()
+                        .map(|l| (*l).clone())
+                        .collect();
+                    let _ = backend_tx
+                        .try_send(BackendToFrontendMessage::TTSLangListUpdated(updated_langs));
+                }
+            }
             FrontendToBackendMessage::UpdateTTSConfig(config) => {
                 let current_config: AppConfig = backend::config::load_config();
                 backend::config::save_config(
@@ -551,6 +729,9 @@ async fn handle_frontend_to_backend_messages(
                 let backend_tx_clone = backend_tx.clone();
                 let audio_tx_clone = audio_tx.clone();
                 let registry_clone = command_registry.clone();
+                let tts_queue_clone = tts_queue.clone();
+                let tts_service_clone = tts_service.clone();
+                let language_config_clone = language_config.clone();
 
                 // Spawn the twitch handler task and store the handle
                 let handle = tokio::spawn(async move {
@@ -559,6 +740,9 @@ async fn handle_frontend_to_backend_messages(
                         backend_tx_clone,
                         audio_tx_clone,
                         registry_clone,
+                        tts_queue_clone,
+                        tts_service_clone,
+                        language_config_clone,
                         welcome_message,
                     )
                     .await;
@@ -636,29 +820,125 @@ async fn handle_frontend_to_backend_messages(
                     ));
                 }
             }
-            _ => {
-                println!("Received other message: {:?}", message);
-            }
         }
     }
 }
 
 // Dedicated audio playback task that owns the OutputStream
 // This solves the Send issue on macOS by keeping OutputStream in a single blocking thread
-fn audio_playback_task(rx: std::sync::mpsc::Receiver<SoundPlaybackRequest>, stream: OutputStream) {
+// Handles both sound effects and TTS audio files
+fn audio_playback_task(rx: std::sync::mpsc::Receiver<AudioPlaybackRequest>, stream: OutputStream) {
     while let Ok(request) = rx.recv() {
-        let sound_path = "./assets/sounds/".to_string() + &request.sound_file;
-        if let Ok(file) = File::open(Path::new(&sound_path)) {
+        let audio_path = if request.is_full_path {
+            request.file_path
+        } else {
+            "./assets/sounds/".to_string() + &request.file_path
+        };
+
+        if let Ok(file) = File::open(Path::new(&audio_path)) {
             if let Ok(source) = Decoder::new(BufReader::new(file)) {
                 let sink = Sink::connect_new(stream.mixer());
                 sink.set_volume(request.volume);
                 sink.append(source);
                 sink.detach();
             } else {
-                error!("Could not decode sound file: {}", sound_path);
+                error!("Could not decode audio file: {}", audio_path);
             }
         } else {
-            error!("Could not open sound file: {}", sound_path);
+            error!("Could not open audio file: {}", audio_path);
+        }
+    }
+}
+
+// Dedicated TTS player task that watches the queue and plays TTS sequentially
+async fn tts_player_task(queue: TTSQueue) {
+    info!("TTS player task started");
+
+    loop {
+        // Wait for an item in the queue
+        if let Some(item) = queue.pop().await {
+            // Check if user is ignored
+            if queue.is_user_ignored(&item.request.username).await {
+                info!("Skipping TTS for ignored user: {}", item.request.username);
+                // Clean up files
+                for file_path in &item.file_paths {
+                    let _ = std::fs::remove_file(file_path);
+                }
+                continue;
+            }
+
+            // Load current volume from config
+            let volume = {
+                let config = backend::config::load_config();
+                config.tts.volume as f32
+            };
+
+            info!(
+                "Playing TTS for user {} in language {}: {} file(s)",
+                item.request.username,
+                item.request.language,
+                item.file_paths.len()
+            );
+
+            // Play files in blocking task to not block tokio runtime
+            let file_paths = item.file_paths.clone();
+            let file_count = file_paths.len();
+
+            match tokio::task::spawn_blocking(move || {
+                // Create audio stream for TTS playback
+                let stream = match rodio::OutputStreamBuilder::open_default_stream() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Failed to open TTS audio stream: {}", e);
+                        return Err(format!("Failed to open audio stream: {}", e));
+                    }
+                };
+
+                // Play each file synchronously (wait for each to finish)
+                for file_path in &file_paths {
+                    if let Ok(file) = File::open(file_path) {
+                        if let Ok(source) = Decoder::new(BufReader::new(file)) {
+                            let sink = Sink::connect_new(stream.mixer());
+                            sink.set_volume(volume);
+                            sink.append(source);
+
+                            // Wait for playback to finish (blocking)
+                            sink.sleep_until_end();
+
+                            info!("Finished playing TTS file: {}", file_path.display());
+                        } else {
+                            error!("Could not decode TTS file: {}", file_path.display());
+                        }
+                    } else {
+                        error!("Could not open TTS file: {}", file_path.display());
+                    }
+
+                    // Clean up the file after playing
+                    if let Err(e) = std::fs::remove_file(file_path) {
+                        error!("Failed to remove TTS file: {}", e);
+                    }
+
+                    // Small delay between chunks
+                    if file_count > 1 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+
+                Ok(())
+            }).await {
+                Ok(Ok(())) => {
+                    info!("Finished TTS for user {}", item.request.username);
+                }
+                Ok(Err(e)) => {
+                    error!("TTS playback error: {}", e);
+                }
+                Err(e) => {
+                    error!("TTS task join error: {}", e);
+                }
+            }
+        } else {
+            // Queue is empty, wait a bit before checking again
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
 }

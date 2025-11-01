@@ -33,7 +33,7 @@ pub enum FrontendToBackendMessage {
 pub enum BackendToFrontendMessage {
     ConnectionSuccess(String),
     ConnectionFailure(String),
-    TTSLangListUpdated,
+    TTSLangListUpdated(Vec<crate::backend::tts::Language>),
     SFXListUpdated,
     ChatMessageReceived(String),
     CreateLog(LogLevel, String),
@@ -100,6 +100,7 @@ pub struct Chatbot {
     log_messages: Vec<LogMessage>,
     sfx_config: Config,
     tts_config: Config,
+    tts_languages: Vec<crate::backend::tts::Language>,
     commands: Vec<crate::backend::commands::Command>,
     editing_command: Option<EditingCommand>,
 }
@@ -121,6 +122,7 @@ impl Chatbot {
         frontend_rx: tokio::sync::mpsc::Receiver<BackendToFrontendMessage>,
         sfx_config: Config,
         tts_config: Config,
+        tts_languages: Vec<crate::backend::tts::Language>,
         commands: Vec<crate::backend::commands::Command>,
     ) -> Self {
         Self {
@@ -135,6 +137,7 @@ impl Chatbot {
             log_messages: Vec::new(),
             sfx_config,
             tts_config,
+            tts_languages,
             commands,
             editing_command: None,
         }
@@ -272,6 +275,10 @@ impl eframe::App for Chatbot {
                 }
                 BackendToFrontendMessage::CommandsUpdated => {
                     // Command list will be updated on the backend
+                }
+                BackendToFrontendMessage::TTSLangListUpdated(updated_langs) => {
+                    // Update TTS languages with the new list from backend
+                    self.tts_languages = updated_langs;
                 }
                 _ => {
                     println!("Received message");
