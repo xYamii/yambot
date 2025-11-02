@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::path::PathBuf;
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TTSRequest {
@@ -14,15 +14,22 @@ pub struct TTSRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct TTSAudioChunk {
+    pub audio_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TTSQueueItem {
     pub request: TTSRequest,
-    pub file_paths: Vec<PathBuf>,
+    pub audio_chunks: Vec<TTSAudioChunk>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TTSQueue {
     queue: Arc<Mutex<VecDeque<TTSQueueItem>>>,
     ignored_users: Arc<Mutex<Vec<String>>>,
+    currently_playing: Arc<Mutex<Option<TTSQueueItem>>>,
+    skip_current: Arc<AtomicBool>,
 }
 
 impl TTSQueue {
@@ -30,6 +37,8 @@ impl TTSQueue {
         Self {
             queue: Arc::new(Mutex::new(VecDeque::new())),
             ignored_users: Arc::new(Mutex::new(Vec::new())),
+            currently_playing: Arc::new(Mutex::new(None)),
+            skip_current: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -63,8 +72,45 @@ impl TTSQueue {
         }
     }
 
-    pub async fn skip_current(&self) -> Option<TTSQueueItem> {
-        self.pop().await
+    pub async fn skip_current(&self) {
+        self.skip_current.store(true, Ordering::SeqCst);
+    }
+
+    pub fn should_skip(&self) -> bool {
+        self.skip_current.load(Ordering::SeqCst)
+    }
+
+    pub fn clear_skip(&self) {
+        self.skip_current.store(false, Ordering::SeqCst);
+    }
+
+    pub fn get_skip_flag(&self) -> Arc<AtomicBool> {
+        self.skip_current.clone()
+    }
+
+    pub async fn set_currently_playing(&self, item: Option<TTSQueueItem>) {
+        let mut playing = self.currently_playing.lock().await;
+        *playing = item;
+    }
+
+    pub async fn get_currently_playing(&self) -> Option<TTSQueueItem> {
+        let playing = self.currently_playing.lock().await;
+        playing.clone()
+    }
+
+    pub async fn get_all_with_current(&self) -> Vec<TTSQueueItem> {
+        let mut result = Vec::new();
+
+        // Add currently playing first
+        if let Some(current) = self.get_currently_playing().await {
+            result.push(current);
+        }
+
+        // Add queued items
+        let queue = self.queue.lock().await;
+        result.extend(queue.iter().cloned());
+
+        result
     }
 
     pub async fn ignore_user(&self, username: &str) {

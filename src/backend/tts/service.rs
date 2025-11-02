@@ -1,9 +1,7 @@
-use super::queue::{TTSQueue, TTSRequest};
-use log::{error, info};
-use std::path::PathBuf;
+use super::queue::{TTSAudioChunk, TTSQueue, TTSRequest};
+use log::info;
 use urlencoding::encode;
 
-const TTS_DIRECTORY: &str = "./assets/tts";
 const MAX_TEXT_LENGTH: usize = 200;
 
 pub struct TTSService {
@@ -12,31 +10,20 @@ pub struct TTSService {
 
 impl TTSService {
     pub fn new(queue: TTSQueue) -> Self {
-        // Create TTS directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(TTS_DIRECTORY) {
-            error!("Failed to create TTS directory: {}", e);
-        }
-
         Self { queue }
     }
 
-    /// Generate TTS audio file from Google Translate API
-    pub async fn generate_tts(
+    /// Fetch TTS audio data as bytes from Google Translate API
+    pub async fn fetch_tts_audio(
         &self,
         text: &str,
         language: &str,
-        unique_id: &str,
-    ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let encoded_text = encode(text);
         let url = format!(
             "https://translate.google.com/translate_tts?ie=UTF-8&q={}&tl={}&client=tw-ob",
             encoded_text, language
         );
-
-        // Create a unique filename based on hash of text, language, and unique_id
-        // This ensures duplicate messages get different files
-        let hash = format!("{:x}", md5::compute(format!("{}{}{}", text, language, unique_id)));
-        let file_path = PathBuf::from(TTS_DIRECTORY).join(format!("{}.mp3", hash));
 
         // Download the TTS audio
         let response = reqwest::get(&url).await?;
@@ -46,16 +33,15 @@ impl TTSService {
         }
 
         let bytes = response.bytes().await?;
-        tokio::fs::write(&file_path, bytes).await?;
 
         info!(
-            "Generated TTS file: {} for text: '{}' in language: {}",
-            file_path.display(),
+            "Fetched TTS audio for text: '{}' in language: {} ({} bytes)",
             text,
-            language
+            language,
+            bytes.len()
         );
 
-        Ok(file_path)
+        Ok(bytes.to_vec())
     }
 
 
@@ -88,23 +74,21 @@ impl TTSService {
         chunks
     }
 
-    /// Process TTS request (generate files for all chunks)
-    /// Returns list of generated file paths
+    /// Process TTS request (fetch audio for all chunks)
+    /// Returns list of audio chunks
     pub async fn process_request(
         &self,
         request: &TTSRequest,
-    ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<TTSAudioChunk>, Box<dyn std::error::Error + Send + Sync>> {
         let chunks = self.split_text(&request.text);
-        let mut file_paths = Vec::new();
+        let mut audio_chunks = Vec::new();
 
-        // Use message ID + chunk index to ensure uniqueness
-        for (index, chunk) in chunks.iter().enumerate() {
-            let unique_id = format!("{}-{}", request.id, index);
-            let file_path = self.generate_tts(chunk, &request.language, &unique_id).await?;
-            file_paths.push(file_path);
+        for chunk in chunks.iter() {
+            let audio_data = self.fetch_tts_audio(chunk, &request.language).await?;
+            audio_chunks.push(TTSAudioChunk { audio_data });
         }
 
-        Ok(file_paths)
+        Ok(audio_chunks)
     }
 
     pub fn queue(&self) -> &TTSQueue {

@@ -27,6 +27,17 @@ pub enum FrontendToBackendMessage {
     RemoveCommand(String),
     UpdateCommand(crate::backend::commands::Command),
     ToggleCommand(String, bool),
+    GetTTSQueue,
+    SkipTTSMessage(String), // Skip by message ID
+    SkipCurrentTTS,
+}
+
+#[derive(Debug, Clone)]
+pub struct TTSQueueItemUI {
+    pub id: String,
+    pub username: String,
+    pub text: String,
+    pub language: String,
 }
 
 #[derive(Debug)]
@@ -39,6 +50,7 @@ pub enum BackendToFrontendMessage {
     CreateLog(LogLevel, String),
     CommandExecuted(String, String), // (command_name, result)
     CommandsUpdated,
+    TTSQueueUpdated(Vec<TTSQueueItemUI>),
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
@@ -101,6 +113,7 @@ pub struct Chatbot {
     sfx_config: Config,
     tts_config: Config,
     tts_languages: Vec<crate::backend::tts::Language>,
+    tts_queue: Vec<TTSQueueItemUI>,
     commands: Vec<crate::backend::commands::Command>,
     editing_command: Option<EditingCommand>,
 }
@@ -138,6 +151,7 @@ impl Chatbot {
             sfx_config,
             tts_config,
             tts_languages,
+            tts_queue: Vec::new(),
             commands,
             editing_command: None,
         }
@@ -279,6 +293,9 @@ impl eframe::App for Chatbot {
                 BackendToFrontendMessage::TTSLangListUpdated(updated_langs) => {
                     // Update TTS languages with the new list from backend
                     self.tts_languages = updated_langs;
+                }
+                BackendToFrontendMessage::TTSQueueUpdated(queue) => {
+                    self.tts_queue = queue;
                 }
                 _ => {
                     println!("Received message");

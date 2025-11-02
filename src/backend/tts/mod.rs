@@ -3,7 +3,7 @@ pub mod queue;
 pub mod service;
 
 pub use languages::{Language, LanguageConfig};
-pub use queue::{TTSQueue, TTSQueueItem, TTSRequest};
+pub use queue::{TTSAudioChunk, TTSQueue, TTSQueueItem, TTSRequest};
 pub use service::TTSService;
 
 use serde::{Deserialize, Serialize};

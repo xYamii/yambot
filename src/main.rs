@@ -1,5 +1,5 @@
 use crate::backend::commands::{CommandExecutor, CommandParser, CommandRegistry, CommandResult};
-use crate::backend::tts::{LanguageConfig, TTSQueue, TTSQueueItem, TTSRequest, TTSService};
+use crate::backend::tts::{LanguageConfig, TTSAudioChunk, TTSQueue, TTSQueueItem, TTSRequest, TTSService};
 use crate::backend::twitch::{
     ChatMessageEvent, TwitchClient, TwitchClientEvent, TwitchConfig, TwitchEvent,
 };
@@ -117,8 +117,9 @@ async fn main() {
 
     // Start TTS player task using tokio
     let tts_queue_for_player = tts_queue.clone();
+    let backend_tx_for_player = backend_tx.clone();
     tokio::spawn(async move {
-        tts_player_task(tts_queue_for_player).await;
+        tts_player_task(tts_queue_for_player, backend_tx_for_player).await;
     });
 
     let registry_clone = shared_registry.clone();
@@ -337,31 +338,71 @@ async fn handle_twitch_messages(
                                         let request_clone = tts_request.clone();
 
                                         tokio::spawn(async move {
-                                            match tts_service_clone.process_request(&request_clone).await {
-                                                Ok(file_paths) => {
-                                                    // Add to queue with generated files
-                                                    let queue_item = TTSQueueItem {
-                                                        request: request_clone.clone(),
-                                                        file_paths,
-                                                    };
-                                                    tts_queue_clone.add(queue_item).await;
+                                            // Split text into chunks
+                                            let text_chunks = tts_service_clone.split_text(&request_clone.text);
+                                            let chunk_count = text_chunks.len();
 
-                                                    let _ = backend_tx_clone
-                                                        .send(BackendToFrontendMessage::CreateLog(
-                                                            ui::LogLevel::INFO,
-                                                            format!("TTS queued: {} in {}", request_clone.text, request_clone.language),
-                                                        ))
-                                                        .await;
+                                            // Process each chunk as a separate queue item
+                                            for (chunk_index, text_chunk) in text_chunks.into_iter().enumerate() {
+                                                // Create unique ID for this chunk
+                                                let chunk_id = if chunk_count > 1 {
+                                                    format!("{}-{}", request_clone.id, chunk_index)
+                                                } else {
+                                                    request_clone.id.clone()
+                                                };
+
+                                                // Fetch audio for this chunk
+                                                match tts_service_clone.fetch_tts_audio(&text_chunk, &request_clone.language).await {
+                                                    Ok(audio_data) => {
+                                                        let chunk_request = TTSRequest {
+                                                            id: chunk_id,
+                                                            username: request_clone.username.clone(),
+                                                            language: request_clone.language.clone(),
+                                                            text: text_chunk,
+                                                            timestamp: request_clone.timestamp,
+                                                        };
+
+                                                        let queue_item = TTSQueueItem {
+                                                            request: chunk_request,
+                                                            audio_chunks: vec![TTSAudioChunk { audio_data }],
+                                                        };
+
+                                                        tts_queue_clone.add(queue_item).await;
+
+                                                        // Send updated queue to frontend (including currently playing)
+                                                        let queue_items = tts_queue_clone.get_all_with_current().await;
+                                                        let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                                                            .into_iter()
+                                                            .map(|item| ui::TTSQueueItemUI {
+                                                                id: item.request.id,
+                                                                username: item.request.username,
+                                                                text: item.request.text,
+                                                                language: item.request.language,
+                                                            })
+                                                            .collect();
+                                                        let _ = backend_tx_clone
+                                                            .send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue))
+                                                            .await;
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to fetch TTS audio for chunk {}/{}: {}", chunk_index + 1, chunk_count, e);
+                                                        let _ = backend_tx_clone
+                                                            .send(BackendToFrontendMessage::CreateLog(
+                                                                ui::LogLevel::ERROR,
+                                                                format!("Failed to generate TTS chunk: {}", e),
+                                                            ))
+                                                            .await;
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    error!("Failed to generate TTS: {}", e);
-                                                    let _ = backend_tx_clone
-                                                        .send(BackendToFrontendMessage::CreateLog(
-                                                            ui::LogLevel::ERROR,
-                                                            format!("Failed to generate TTS: {}", e),
-                                                        ))
-                                                        .await;
-                                                }
+                                            }
+
+                                            if chunk_count > 0 {
+                                                let _ = backend_tx_clone
+                                                    .send(BackendToFrontendMessage::CreateLog(
+                                                        ui::LogLevel::INFO,
+                                                        format!("TTS queued: {} ({} part{})", request_clone.text, chunk_count, if chunk_count > 1 { "s" } else { "" }),
+                                                    ))
+                                                    .await;
                                             }
                                         });
                                     }
@@ -805,6 +846,80 @@ async fn handle_frontend_to_backend_messages(
                     ));
                 }
             }
+            FrontendToBackendMessage::GetTTSQueue => {
+                // Get all items from queue (including currently playing) and send to frontend
+                let queue_items = tts_queue.get_all_with_current().await;
+                let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                    .into_iter()
+                    .map(|item| ui::TTSQueueItemUI {
+                        id: item.request.id,
+                        username: item.request.username,
+                        text: item.request.text,
+                        language: item.request.language,
+                    })
+                    .collect();
+                let _ = backend_tx.try_send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue));
+            }
+            FrontendToBackendMessage::SkipTTSMessage(message_id) => {
+                // Check if it's the currently playing item
+                let is_current = if let Some(current) = tts_queue.get_currently_playing().await {
+                    current.request.id == message_id
+                } else {
+                    false
+                };
+
+                if is_current {
+                    // Skip currently playing
+                    tts_queue.skip_current().await;
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        "Skipping currently playing TTS message".to_string(),
+                    ));
+                } else if tts_queue.remove(&message_id).await {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::INFO,
+                        format!("Removed TTS message from queue: {}", message_id),
+                    ));
+                } else {
+                    let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                        ui::LogLevel::WARN,
+                        "TTS message not found in queue".to_string(),
+                    ));
+                }
+
+                // Send updated queue
+                let queue_items = tts_queue.get_all_with_current().await;
+                let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                    .into_iter()
+                    .map(|item| ui::TTSQueueItemUI {
+                        id: item.request.id,
+                        username: item.request.username,
+                        text: item.request.text,
+                        language: item.request.language,
+                    })
+                    .collect();
+                let _ = backend_tx.try_send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue));
+            }
+            FrontendToBackendMessage::SkipCurrentTTS => {
+                tts_queue.skip_current().await;
+                let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
+                    ui::LogLevel::INFO,
+                    "Skipping current TTS message".to_string(),
+                ));
+
+                // Send updated queue
+                let queue_items = tts_queue.get_all_with_current().await;
+                let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                    .into_iter()
+                    .map(|item| ui::TTSQueueItemUI {
+                        id: item.request.id,
+                        username: item.request.username,
+                        text: item.request.text,
+                        language: item.request.language,
+                    })
+                    .collect();
+                let _ = backend_tx.try_send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue));
+            }
             FrontendToBackendMessage::DisconnectFromChat(_channel_name) => {
                 // Abort the twitch message handler task if it's running
                 if let Some(handle) = twitch_task_handle.take() {
@@ -851,7 +966,10 @@ fn audio_playback_task(rx: std::sync::mpsc::Receiver<AudioPlaybackRequest>, stre
 }
 
 // Dedicated TTS player task that watches the queue and plays TTS sequentially
-async fn tts_player_task(queue: TTSQueue) {
+async fn tts_player_task(
+    queue: TTSQueue,
+    backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+) {
     info!("TTS player task started");
 
     loop {
@@ -860,12 +978,24 @@ async fn tts_player_task(queue: TTSQueue) {
             // Check if user is ignored
             if queue.is_user_ignored(&item.request.username).await {
                 info!("Skipping TTS for ignored user: {}", item.request.username);
-                // Clean up files
-                for file_path in &item.file_paths {
-                    let _ = std::fs::remove_file(file_path);
-                }
                 continue;
             }
+
+            // Set as currently playing
+            queue.set_currently_playing(Some(item.clone())).await;
+
+            // Send updated queue to frontend
+            let queue_items = queue.get_all_with_current().await;
+            let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                .into_iter()
+                .map(|item| ui::TTSQueueItemUI {
+                    id: item.request.id,
+                    username: item.request.username,
+                    text: item.request.text,
+                    language: item.request.language,
+                })
+                .collect();
+            let _ = backend_tx.send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue)).await;
 
             // Load current volume from config
             let volume = {
@@ -874,15 +1004,16 @@ async fn tts_player_task(queue: TTSQueue) {
             };
 
             info!(
-                "Playing TTS for user {} in language {}: {} file(s)",
+                "Playing TTS for user {} in language {}: {} chunk(s)",
                 item.request.username,
                 item.request.language,
-                item.file_paths.len()
+                item.audio_chunks.len()
             );
 
-            // Play files in blocking task to not block tokio runtime
-            let file_paths = item.file_paths.clone();
-            let file_count = file_paths.len();
+            // Play audio chunks from memory
+            let audio_chunks = item.audio_chunks.clone();
+            let chunk_count = audio_chunks.len();
+            let skip_flag = queue.get_skip_flag();
 
             match tokio::task::spawn_blocking(move || {
                 // Create audio stream for TTS playback
@@ -894,32 +1025,37 @@ async fn tts_player_task(queue: TTSQueue) {
                     }
                 };
 
-                // Play each file synchronously (wait for each to finish)
-                for file_path in &file_paths {
-                    if let Ok(file) = File::open(file_path) {
-                        if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                            let sink = Sink::connect_new(stream.mixer());
-                            sink.set_volume(volume);
-                            sink.append(source);
-
-                            // Wait for playback to finish (blocking)
-                            sink.sleep_until_end();
-
-                            info!("Finished playing TTS file: {}", file_path.display());
-                        } else {
-                            error!("Could not decode TTS file: {}", file_path.display());
-                        }
-                    } else {
-                        error!("Could not open TTS file: {}", file_path.display());
+                // Play each audio chunk synchronously
+                for (index, chunk) in audio_chunks.iter().enumerate() {
+                    // Check skip flag before playing each chunk
+                    if skip_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        info!("Skip detected, stopping playback");
+                        return Ok(());
                     }
 
-                    // Clean up the file after playing
-                    if let Err(e) = std::fs::remove_file(file_path) {
-                        error!("Failed to remove TTS file: {}", e);
+                    let cursor = std::io::Cursor::new(chunk.audio_data.clone());
+                    if let Ok(source) = Decoder::new(BufReader::new(cursor)) {
+                        let sink = Sink::connect_new(stream.mixer());
+                        sink.set_volume(volume);
+                        sink.append(source);
+
+                        // Poll while waiting for playback to finish, checking skip flag
+                        while !sink.empty() {
+                            if skip_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                info!("Skip detected during playback, stopping");
+                                sink.stop();
+                                return Ok(());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+
+                        info!("Finished playing TTS chunk {}/{}", index + 1, chunk_count);
+                    } else {
+                        error!("Could not decode TTS audio chunk {}/{}", index + 1, chunk_count);
                     }
 
                     // Small delay between chunks
-                    if file_count > 1 {
+                    if chunk_count > 1 && index < chunk_count - 1 {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 }
@@ -936,6 +1072,25 @@ async fn tts_player_task(queue: TTSQueue) {
                     error!("TTS task join error: {}", e);
                 }
             }
+
+            // Clear skip flag
+            queue.clear_skip();
+
+            // Clear currently playing
+            queue.set_currently_playing(None).await;
+
+            // Send updated queue to frontend
+            let queue_items = queue.get_all_with_current().await;
+            let ui_queue: Vec<ui::TTSQueueItemUI> = queue_items
+                .into_iter()
+                .map(|item| ui::TTSQueueItemUI {
+                    id: item.request.id,
+                    username: item.request.username,
+                    text: item.request.text,
+                    language: item.request.language,
+                })
+                .collect();
+            let _ = backend_tx.send(BackendToFrontendMessage::TTSQueueUpdated(ui_queue)).await;
         } else {
             // Queue is empty, wait a bit before checking again
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
