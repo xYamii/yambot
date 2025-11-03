@@ -44,6 +44,7 @@ impl Default for TTSConfig {
 }
 
 /// Load TTS language configuration
+/// Loads from tts_languages.toml file which should contain all language definitions
 pub fn load_language_config() -> LanguageConfig {
     let project_root = project_root::get_project_root().unwrap();
     let config_path = project_root.join(LANGUAGES_CONFIG_FILE);
@@ -52,22 +53,15 @@ pub fn load_language_config() -> LanguageConfig {
         match TTSConfig::from_file(&config_path) {
             Ok(config) => config.languages,
             Err(e) => {
-                log::error!("Failed to load TTS language config: {}", e);
-                let config = LanguageConfig::new();
-                // Save default config
-                if let Err(e) = save_language_config(&config) {
-                    log::error!("Failed to save default TTS language config: {}", e);
-                }
-                config
+                log::error!("Failed to load TTS language config from {}: {}", config_path.display(), e);
+                log::error!("Please ensure tts_languages.toml exists and is properly formatted");
+                panic!("Cannot start without valid tts_languages.toml file");
             }
         }
     } else {
-        // Create default config
-        let config = LanguageConfig::new();
-        if let Err(e) = save_language_config(&config) {
-            log::error!("Failed to save default TTS language config: {}", e);
-        }
-        config
+        log::error!("TTS language config file not found at: {}", config_path.display());
+        log::error!("Please ensure tts_languages.toml exists with all language definitions");
+        panic!("Cannot start without tts_languages.toml file");
     }
 }
 
