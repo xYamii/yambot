@@ -52,11 +52,11 @@ pub fn load_language_config() -> LanguageConfig {
         match TTSConfig::from_file(&config_path) {
             Ok(config) => config.languages,
             Err(e) => {
-                eprintln!("Failed to load TTS language config: {}", e);
+                log::error!("Failed to load TTS language config: {}", e);
                 let config = LanguageConfig::new();
                 // Save default config
                 if let Err(e) = save_language_config(&config) {
-                    eprintln!("Failed to save default TTS language config: {}", e);
+                    log::error!("Failed to save default TTS language config: {}", e);
                 }
                 config
             }
@@ -65,7 +65,7 @@ pub fn load_language_config() -> LanguageConfig {
         // Create default config
         let config = LanguageConfig::new();
         if let Err(e) = save_language_config(&config) {
-            eprintln!("Failed to save default TTS language config: {}", e);
+            log::error!("Failed to save default TTS language config: {}", e);
         }
         config
     }

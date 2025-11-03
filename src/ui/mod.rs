@@ -297,8 +297,12 @@ impl eframe::App for Chatbot {
                 BackendToFrontendMessage::TTSQueueUpdated(queue) => {
                     self.tts_queue = queue;
                 }
-                _ => {
-                    println!("Received message");
+                BackendToFrontendMessage::SFXListUpdated => {
+                    // Sound list has been updated by the file watcher
+                    // The UI will automatically reflect changes since it reads from FILES every frame
+                }
+                BackendToFrontendMessage::ChatMessageReceived(_) => {
+                    // Chat message received
                 }
             }
         }

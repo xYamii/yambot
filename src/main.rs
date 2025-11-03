@@ -94,9 +94,21 @@ async fn main() {
     let command_registry = backend::config::load_commands();
 
     // Initialize SoundsManager to start file watching
-    let _sounds_manager = backend::sfx::SoundsManager::new()
-        .await
-        .expect("Failed to initialize SoundsManager");
+    // Spawn it in a task to keep it alive for the entire application lifetime
+    let backend_tx_for_sounds = backend_tx.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let _sounds_manager = backend::sfx::SoundsManager::new(backend_tx_for_sounds)
+                .await
+                .expect("Failed to initialize SoundsManager");
+
+            // Keep the watcher alive forever
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            }
+        });
+    });
 
     // Wrap command registry in Arc<RwLock> for sharing across tasks
     let shared_registry = Arc::new(RwLock::new(command_registry));
@@ -528,30 +540,32 @@ async fn handle_twitch_messages(
                 }
 
                 TwitchEvent::MessageDelete(delete) => {
-                    println!(
+                    log::info!(
                         "Message {} from {} was deleted",
-                        delete.message_id, delete.target_user_name
+                        delete.message_id,
+                        delete.target_user_name
                     );
                 }
 
                 TwitchEvent::ClearUserMessages(clear) => {
-                    println!(
+                    log::info!(
                         "Messages from {} were cleared (ban/timeout)",
                         clear.target_user_name
                     );
                 }
 
                 TwitchEvent::ChatClear(clear) => {
-                    println!(
+                    log::info!(
                         "Chat was cleared in {}'s channel",
                         clear.broadcaster_user_name
                     );
                 }
 
                 TwitchEvent::ChatSettingsUpdate(settings) => {
-                    println!(
+                    log::info!(
                         "Chat settings updated: slow_mode={}, sub_only={}",
-                        settings.slow_mode, settings.subscriber_mode
+                        settings.slow_mode,
+                        settings.subscriber_mode
                     );
                 }
 
@@ -567,9 +581,13 @@ async fn handle_twitch_messages(
                         String::new()
                     };
 
-                    println!(
+                    log::info!(
                         "🔨 {} was {} by {}: {}{}",
-                        ban.user_name, ban_type, ban.moderator_user_name, ban.reason, duration_info
+                        ban.user_name,
+                        ban_type,
+                        ban.moderator_user_name,
+                        ban.reason,
+                        duration_info
                     );
 
                     let _ = backend_tx
@@ -588,9 +606,10 @@ async fn handle_twitch_messages(
                 }
 
                 TwitchEvent::ChannelUnban(unban) => {
-                    println!(
+                    log::info!(
                         "✅ {} was unbanned by {}",
-                        unban.user_name, unban.moderator_user_name
+                        unban.user_name,
+                        unban.moderator_user_name
                     );
 
                     let _ = backend_tx
