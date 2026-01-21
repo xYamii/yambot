@@ -171,7 +171,7 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
             };
 
             // Send to client
-            if sender.send(Message::Text(json)).await.is_err() {
+            if sender.send(Message::Text(json.into())).await.is_err() {
                 log::debug!("Client disconnected during send");
                 break;
             }

@@ -796,11 +796,12 @@ async fn connect_to_chat(
 
     // Load config to get auth_token and client_id
     let config = crate::backend::config::load_config();
-    let twitch_config = TwitchConfig {
-        channel_name: config.chatbot.channel_name.clone(),
-        auth_token: config.chatbot.auth_token.clone(),
-        refresh_token: config.chatbot.refresh_token.clone(),
-    };
+    let twitch_config = TwitchConfig::builder()
+        .channel(&config.chatbot.channel_name)
+        .tokens(&config.chatbot.auth_token, &config.chatbot.refresh_token)
+        .credentials(&config.chatbot.client_id, &config.chatbot.client_secret)
+        .build()
+        .expect("Failed to build Twitch config");
 
     // Get welcome message if configured
     let welcome_message = if config.chatbot.welcome_message.trim().is_empty() {

@@ -113,6 +113,8 @@ pub struct ChatbotConfig {
     pub channel_name: String,
     pub auth_token: String,
     pub refresh_token: String,
+    pub client_id: String,
+    pub client_secret: String,
     pub sound_format: crate::backend::sfx::Format,
     #[serde(default)]
     pub welcome_message: String,
