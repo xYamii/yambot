@@ -263,6 +263,21 @@ async fn handle_twitch_event(
             crate::backend::config::save_config(&current_config);
         }
 
+        TwitchClientEvent::TokenExpired => {
+            // Token expired - needs to be refreshed via external API
+            // This will be implemented later when the API endpoint is provided
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::WARN,
+                    "⚠ OAuth token expired. Token refresh will be implemented soon.".to_string(),
+                ))
+                .await;
+
+            // TODO: Call refresh token API endpoint when available
+            // Example: POST to API with refresh_token, get new access_token and refresh_token
+            // Then call: client.update_tokens(new_access, new_refresh).await;
+        }
+
         TwitchClientEvent::Disconnected => {
             let _ = backend_tx
                 .send(BackendToFrontendMessage::ConnectionFailure(
