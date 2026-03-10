@@ -138,10 +138,22 @@ pub fn load_config() -> AppConfig {
     return config;
 }
 
+pub async fn load_config_async() -> AppConfig {
+    tokio::task::spawn_blocking(|| load_config())
+        .await
+        .expect("Failed to load config")
+}
+
 pub fn save_config(config: &AppConfig) {
     let project_root = project_root::get_project_root().unwrap();
     let config_path = project_root.join("config.toml");
     config.to_file(config_path).unwrap();
+}
+
+pub async fn save_config_async(config: AppConfig) {
+    tokio::task::spawn_blocking(move || save_config(&config))
+        .await
+        .expect("Failed to save config")
 }
 
 pub fn load_commands() -> CommandRegistry {

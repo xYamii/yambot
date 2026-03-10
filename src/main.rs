@@ -30,18 +30,15 @@ async fn main() {
     // Initialize SoundsManager to start file watching
     // Spawn it in a task to keep it alive for the entire application lifetime
     let backend_tx_for_sounds = backend_tx.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            let _sounds_manager = backend::sfx::SoundsManager::new(backend_tx_for_sounds)
-                .await
-                .expect("Failed to initialize SoundsManager");
+    tokio::spawn(async move {
+        let _sounds_manager = backend::sfx::SoundsManager::new(backend_tx_for_sounds)
+            .await
+            .expect("Failed to initialize SoundsManager");
 
-            // Keep the watcher alive forever
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-            }
-        });
+        // Keep the watcher alive forever
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        }
     });
 
     // Wrap command registry in Arc<RwLock> for sharing across tasks
@@ -73,8 +70,8 @@ async fn main() {
     // Initialize overlay server if enabled
     let mut overlay_ws_state = backend::overlay::WebSocketState::new();
 
-    // Create channel for overlay client messages
-    let (overlay_client_tx, overlay_client_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Create channel for overlay client messages (bounded to prevent memory exhaustion)
+    let (overlay_client_tx, overlay_client_rx) = tokio::sync::mpsc::channel(100);
     overlay_ws_state.set_client_message_channel(overlay_client_tx);
 
     if config.overlay.enabled {
