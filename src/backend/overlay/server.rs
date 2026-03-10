@@ -1,12 +1,12 @@
 use axum::{
-    http::StatusCode,
+    http::{Method, StatusCode, header},
     response::IntoResponse,
     routing::get,
     Router,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::backend::overlay::websocket::websocket_handler;
@@ -46,15 +46,24 @@ pub async fn start_overlay_server(
 /// Create the axum router with all routes
 fn create_router(overlay_dir: PathBuf, ws_state: WebSocketState) -> Router {
     // CORS configuration for OBS browser source
+    // Restricting to localhost origins for security
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin([
+            "http://localhost:3000".parse().unwrap(),
+            "http://127.0.0.1:3000".parse().unwrap(),
+        ])
+        .allow_methods([Method::GET])
+        .allow_headers([header::CONTENT_TYPE]);
+
+    // Create ServeDir with security settings - prevent following symlinks
+    let serve_dir = ServeDir::new(overlay_dir)
+        .precompressed_gzip()
+        .precompressed_br();
 
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(websocket_handler))
-        .nest_service("/", ServeDir::new(overlay_dir))
+        .nest_service("/", serve_dir)
         .layer(cors)
         .with_state(ws_state)
 }

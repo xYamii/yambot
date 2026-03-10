@@ -20,10 +20,6 @@ impl Chatbot {
                 ui.label("Client ID:");
                 ui.text_edit_singleline(&mut self.config.client_id);
             });
-            ui.horizontal(|ui| {
-                ui.label("Client secret:");
-                ui.add(egui::TextEdit::singleline(&mut self.config.client_secret).password(true))
-            });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let format = match self.config.sound_format {
@@ -85,7 +81,6 @@ impl Chatbot {
                         auth_token: self.config.auth_token.clone(),
                         refresh_token: self.config.refresh_token.clone(),
                         client_id: self.config.client_id.clone(),
-                        client_secret: self.config.client_secret.clone(),
                         sound_format: self.config.sound_format.clone(),
                         welcome_message: self.config.welcome_message.clone(),
                     }))

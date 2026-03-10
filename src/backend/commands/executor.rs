@@ -17,24 +17,14 @@ pub enum CommandResult {
 
 /// Executor for running commands
 #[derive(Debug)]
-pub struct CommandExecutor {
-    registry: CommandRegistry,
+pub struct CommandExecutor<'a> {
+    registry: &'a mut CommandRegistry,
 }
 
-impl CommandExecutor {
-    /// Create a new command executor
-    pub fn new(registry: CommandRegistry) -> Self {
+impl<'a> CommandExecutor<'a> {
+    /// Create a new command executor with a mutable reference to the registry
+    pub fn new_with_ref(registry: &'a mut CommandRegistry) -> Self {
         Self { registry }
-    }
-
-    /// Get a reference to the registry
-    pub fn registry(&self) -> &CommandRegistry {
-        &self.registry
-    }
-
-    /// Get a mutable reference to the registry
-    pub fn registry_mut(&mut self) -> &mut CommandRegistry {
-        &mut self.registry
     }
 
     /// Execute a command

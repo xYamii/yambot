@@ -13,6 +13,9 @@ use tokio::sync::{broadcast, RwLock};
 /// Maximum number of messages that can be buffered in the broadcast channel
 const CHANNEL_CAPACITY: usize = 100;
 
+/// Maximum WebSocket message size (64 KB)
+const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
 /// Default scale value for overlay elements
 fn default_scale() -> f32 {
     1.0
@@ -25,8 +28,8 @@ pub struct WebSocketState {
     tx: broadcast::Sender<OverlayEvent>,
     /// Counter for connected clients
     client_count: Arc<RwLock<usize>>,
-    /// Channel for receiving messages from overlay clients
-    client_message_tx: Option<tokio::sync::mpsc::UnboundedSender<OverlayClientMessage>>,
+    /// Channel for receiving messages from overlay clients (bounded to prevent memory exhaustion)
+    client_message_tx: Option<tokio::sync::mpsc::Sender<OverlayClientMessage>>,
 }
 
 impl WebSocketState {
@@ -43,7 +46,7 @@ impl WebSocketState {
     /// Set a channel to receive messages from overlay clients
     pub fn set_client_message_channel(
         &mut self,
-        tx: tokio::sync::mpsc::UnboundedSender<OverlayClientMessage>,
+        tx: tokio::sync::mpsc::Sender<OverlayClientMessage>,
     ) {
         self.client_message_tx = Some(tx);
     }
@@ -66,9 +69,9 @@ impl WebSocketState {
     }
 
     /// Send a client message to the backend
-    fn send_client_message(&self, message: OverlayClientMessage) {
+    async fn send_client_message(&self, message: OverlayClientMessage) {
         if let Some(ref tx) = self.client_message_tx {
-            if let Err(e) = tx.send(message) {
+            if let Err(e) = tx.send(message).await {
                 log::warn!("Failed to send client message to backend: {}", e);
             }
         }
@@ -184,12 +187,18 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
+                    // Check message size to prevent memory exhaustion
+                    if text.len() > MAX_MESSAGE_SIZE {
+                        log::warn!("Received oversized message: {} bytes, closing connection", text.len());
+                        break;
+                    }
+
                     log::debug!("Received message from overlay client: {}", text);
                     // Parse and handle client messages
                     match serde_json::from_str::<OverlayClientMessage>(&text) {
                         Ok(client_msg) => {
                             log::info!("Overlay client message: {:?}", client_msg);
-                            state_clone.send_client_message(client_msg);
+                            state_clone.send_client_message(client_msg).await;
                         }
                         Err(e) => {
                             log::warn!("Failed to parse overlay client message: {}", e);

@@ -14,6 +14,36 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Response from the external token refresh API
+#[derive(Debug, Deserialize)]
+struct TokenRefreshResponse {
+    access_token: String,
+    refresh_token: String,
+}
+
+/// Refresh OAuth tokens using external API endpoint
+async fn refresh_tokens_external(
+    refresh_token: &str,
+) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post("http://localhost:3000/api/tokens/refresh")
+        .json(&serde_json::json!({
+            "refresh_token": refresh_token
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("Token refresh failed with status {}: {}", status, error_text).into());
+    }
+
+    let token_response: TokenRefreshResponse = response.json().await?;
+    Ok((token_response.access_token, token_response.refresh_token))
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub message_id: String,
@@ -39,6 +69,25 @@ impl From<crate::backend::twitch::ChatMessageEvent> for ChatMessage {
             username: msg.chatter_user_login,
             user_id: msg.chatter_user_id,
             color: msg.color,
+        }
+    }
+}
+
+impl From<&crate::backend::twitch::ChatMessageEvent> for ChatMessage {
+    fn from(msg: &crate::backend::twitch::ChatMessageEvent) -> Self {
+        let badges = msg
+            .badges
+            .iter()
+            .map(|badge| format!("{}-{}", badge.set_id, badge.id))
+            .collect();
+
+        ChatMessage {
+            message_id: msg.message_id.clone(),
+            message_text: msg.message.text.clone(),
+            badges,
+            username: msg.chatter_user_login.clone(),
+            user_id: msg.chatter_user_id.clone(),
+            color: msg.color.clone(),
         }
     }
 }
@@ -183,7 +232,7 @@ async fn handle_twitch_event(
 
         TwitchClientEvent::ChatEvent(chat_event) => match chat_event {
             crate::backend::twitch::TwitchEvent::ChatMessage(msg) => {
-                let chat_message: ChatMessage = msg.clone().into();
+                let chat_message: ChatMessage = (&msg).into();
 
                 // Check if message is a TTS command
                 if handle_tts_command(&msg, tts_queue, tts_service, language_config, backend_tx)
@@ -264,18 +313,42 @@ async fn handle_twitch_event(
         }
 
         TwitchClientEvent::TokenExpired => {
-            // Token expired - needs to be refreshed via external API
-            // This will be implemented later when the API endpoint is provided
+            // Token expired - refresh via external API
             let _ = backend_tx
                 .send(BackendToFrontendMessage::CreateLog(
-                    LogLevel::WARN,
-                    "⚠ OAuth token expired. Token refresh will be implemented soon.".to_string(),
+                    LogLevel::INFO,
+                    "🔄 OAuth token expired. Refreshing tokens...".to_string(),
                 ))
                 .await;
 
-            // TODO: Call refresh token API endpoint when available
-            // Example: POST to API with refresh_token, get new access_token and refresh_token
-            // Then call: client.update_tokens(new_access, new_refresh).await;
+            // Get current refresh token from config
+            let config = crate::backend::config::load_config();
+            let refresh_token = config.chatbot.refresh_token.clone();
+
+            // Refresh tokens via external API
+            match refresh_tokens_external(&refresh_token).await {
+                Ok((new_access_token, new_refresh_token)) => {
+                    // Update tokens in the client
+                    client.update_tokens(&new_access_token, &new_refresh_token).await;
+
+                    // Save new tokens to config
+                    let mut current_config = crate::backend::config::load_config();
+                    current_config.chatbot.auth_token = new_access_token;
+                    current_config.chatbot.refresh_token = new_refresh_token;
+                    crate::backend::config::save_config(&current_config);
+
+                    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
+                        LogLevel::INFO,
+                        "✓ Tokens refreshed successfully".to_string(),
+                    )).await;
+                }
+                Err(e) => {
+                    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
+                        LogLevel::ERROR,
+                        format!("❌ Failed to refresh tokens: {}. Please re-authenticate.", e),
+                    )).await;
+                }
+            }
         }
 
         TwitchClientEvent::Disconnected => {
@@ -453,15 +526,11 @@ async fn handle_command(
     backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
     audio_tx: &AudioPlaybackSender,
 ) {
-    // Lock the registry and execute command
+    // Lock the registry and execute command directly on it
     let result = {
         let mut registry = command_registry.write().await;
-        let mut executor = CommandExecutor::new(registry.clone());
-        let result = executor.execute(&context);
-
-        // Update cooldowns in the shared registry
-        *registry = executor.registry().clone();
-        result
+        let mut executor = CommandExecutor::new_with_ref(&mut registry);
+        executor.execute(&context)
     };
 
     match result {
@@ -532,9 +601,21 @@ fn handle_sound_file(
     context: &crate::backend::commands::CommandContext,
     audio_tx: &AudioPlaybackSender,
 ) {
+    // Sanitize command name to prevent path traversal
+    let sanitized_name: String = context.command_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+
+    // Check if sanitization changed the name (potential attack attempt)
+    if sanitized_name != context.command_name {
+        log::warn!("Command name contains invalid characters: {}", context.command_name);
+        return;
+    }
+
     // Check if there's a sound file with this name
     let sound_format = crate::backend::sfx::Soundlist::get_format();
-    let sound_path = format!("./assets/sounds/{}.{}", context.command_name, sound_format);
+    let sound_path = format!("./assets/sounds/{}.{}", sanitized_name, sound_format);
 
     if std::path::Path::new(&sound_path).exists() {
         // Check if user has permission to play sounds
@@ -549,7 +630,7 @@ fn handle_sound_file(
 
         if has_permission && config.sfx.enabled {
             // Play the sound with volume from sfx config
-            let sound_file = format!("{}.{}", context.command_name, sound_format);
+            let sound_file = format!("{}.{}", sanitized_name, sound_format);
             let _ = audio_tx.send_sound(sound_file, config.sfx.volume as f32);
         }
     }
@@ -814,7 +895,7 @@ async fn connect_to_chat(
     let twitch_config = TwitchConfig::builder()
         .channel(&config.chatbot.channel_name)
         .tokens(&config.chatbot.auth_token, &config.chatbot.refresh_token)
-        .credentials(&config.chatbot.client_id, &config.chatbot.client_secret)
+        .client_id_only(&config.chatbot.client_id)
         .build()
         .expect("Failed to build Twitch config");
 
@@ -1059,7 +1140,7 @@ async fn handle_test_overlay_wheel(
 
 /// Handle messages from overlay clients (wheel results, position updates, etc.)
 pub async fn handle_overlay_client_messages(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::backend::overlay::websocket::OverlayClientMessage>,
+    mut rx: tokio::sync::mpsc::Receiver<crate::backend::overlay::websocket::OverlayClientMessage>,
     backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
 ) {
     use crate::backend::overlay::websocket::OverlayClientMessage;
@@ -1142,6 +1223,23 @@ async fn handle_position_update(
     scale: f32,
     backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
 ) {
+    // Validate position values
+    if !x.is_finite() || !y.is_finite() || !scale.is_finite() {
+        log::warn!("Received invalid position values: x={}, y={}, scale={}", x, y, scale);
+        return;
+    }
+
+    // Validate ranges
+    if scale < 0.1 || scale > 10.0 {
+        log::warn!("Scale out of acceptable range: {}", scale);
+        return;
+    }
+
+    if x < 0.0 || x > 100.0 || y < 0.0 || y > 100.0 {
+        log::warn!("Position out of acceptable range: x={}, y={}", x, y);
+        return;
+    }
+
     // Update config with new position and scale
     let mut config = crate::backend::config::load_config();
 
