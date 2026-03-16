@@ -24,10 +24,11 @@ struct TokenRefreshResponse {
 /// Refresh OAuth tokens using external API endpoint
 async fn refresh_tokens_external(
     refresh_token: &str,
+    token_refresh_url: &str,
 ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
     let response = client
-        .post("http://localhost:3000/api/tokens/refresh")
+        .post(token_refresh_url)
         .json(&serde_json::json!({
             "refresh_token": refresh_token
         }))
@@ -36,8 +37,15 @@ async fn refresh_tokens_external(
 
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("Token refresh failed with status {}: {}", status, error_text).into());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!(
+            "Token refresh failed with status {}: {}",
+            status, error_text
+        )
+        .into());
     }
 
     let token_response: TokenRefreshResponse = response.json().await?;
@@ -191,7 +199,9 @@ async fn send_welcome_message(
                 let error_str = e.to_string();
 
                 let user_msg = if error_str.contains("403") || error_str.contains("Forbidden") {
-                    format!("❌ Cannot send welcome message - Missing OAuth scope 'user:write:chat'. Please re-authorize with write permissions.")
+                    format!(
+                        "❌ Cannot send welcome message - Missing OAuth scope 'user:write:chat'. Please re-authorize with write permissions."
+                    )
                 } else {
                     format!("❌ Failed to send welcome message: {}", e)
                 };
@@ -324,12 +334,15 @@ async fn handle_twitch_event(
             // Get current refresh token from config
             let config = crate::backend::config::load_config();
             let refresh_token = config.chatbot.refresh_token.clone();
+            let token_refresh_url = config.chatbot.token_refresh_url.clone();
 
             // Refresh tokens via external API
-            match refresh_tokens_external(&refresh_token).await {
+            match refresh_tokens_external(&refresh_token, &token_refresh_url).await {
                 Ok((new_access_token, new_refresh_token)) => {
                     // Update tokens in the client
-                    client.update_tokens(&new_access_token, &new_refresh_token).await;
+                    client
+                        .update_tokens(&new_access_token, &new_refresh_token)
+                        .await;
 
                     // Save new tokens to config
                     let mut current_config = crate::backend::config::load_config();
@@ -337,16 +350,23 @@ async fn handle_twitch_event(
                     current_config.chatbot.refresh_token = new_refresh_token;
                     crate::backend::config::save_config(&current_config);
 
-                    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                        LogLevel::INFO,
-                        "✓ Tokens refreshed successfully".to_string(),
-                    )).await;
+                    let _ = backend_tx
+                        .send(BackendToFrontendMessage::CreateLog(
+                            LogLevel::INFO,
+                            "✓ Tokens refreshed successfully".to_string(),
+                        ))
+                        .await;
                 }
                 Err(e) => {
-                    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                        LogLevel::ERROR,
-                        format!("❌ Failed to refresh tokens: {}. Please re-authenticate.", e),
-                    )).await;
+                    let _ = backend_tx
+                        .send(BackendToFrontendMessage::CreateLog(
+                            LogLevel::ERROR,
+                            format!(
+                                "❌ Failed to refresh tokens: {}. Please re-authenticate.",
+                                e
+                            ),
+                        ))
+                        .await;
                 }
             }
         }
@@ -602,14 +622,18 @@ fn handle_sound_file(
     audio_tx: &AudioPlaybackSender,
 ) {
     // Sanitize command name to prevent path traversal
-    let sanitized_name: String = context.command_name
+    let sanitized_name: String = context
+        .command_name
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
         .collect();
 
     // Check if sanitization changed the name (potential attack attempt)
     if sanitized_name != context.command_name {
-        log::warn!("Command name contains invalid characters: {}", context.command_name);
+        log::warn!(
+            "Command name contains invalid characters: {}",
+            context.command_name
+        );
         return;
     }
 
@@ -1086,26 +1110,34 @@ async fn handle_enable_overlay(
     config.overlay.enabled = true;
     crate::backend::config::save_config(&config);
 
-    let _ = backend_tx.send(BackendToFrontendMessage::OverlayStatusChanged(true)).await;
-    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-        LogLevel::WARN,
-        "Overlay enabled. Please restart the application for changes to take effect.".to_string(),
-    )).await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::OverlayStatusChanged(true))
+        .await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::CreateLog(
+            LogLevel::WARN,
+            "Overlay enabled. Please restart the application for changes to take effect."
+                .to_string(),
+        ))
+        .await;
 }
 
-async fn handle_disable_overlay(
-    backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
-) {
+async fn handle_disable_overlay(backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>) {
     // Update config to disable overlay
     let mut config = crate::backend::config::load_config();
     config.overlay.enabled = false;
     crate::backend::config::save_config(&config);
 
-    let _ = backend_tx.send(BackendToFrontendMessage::OverlayStatusChanged(false)).await;
-    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-        LogLevel::WARN,
-        "Overlay disabled. Please restart the application for changes to take effect.".to_string(),
-    )).await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::OverlayStatusChanged(false))
+        .await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::CreateLog(
+            LogLevel::WARN,
+            "Overlay disabled. Please restart the application for changes to take effect."
+                .to_string(),
+        ))
+        .await;
 }
 
 async fn handle_test_overlay_wheel(
@@ -1132,10 +1164,12 @@ async fn handle_test_overlay_wheel(
 
     overlay_ws_state.broadcast(event).await;
 
-    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-        LogLevel::INFO,
-        "Test wheel spin sent to overlay".to_string(),
-    )).await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::CreateLog(
+            LogLevel::INFO,
+            "Test wheel spin sent to overlay".to_string(),
+        ))
+        .await;
 }
 
 /// Handle messages from overlay clients (wheel results, position updates, etc.)
@@ -1148,19 +1182,36 @@ pub async fn handle_overlay_client_messages(
     while let Some(message) = rx.recv().await {
         match message {
             OverlayClientMessage::WheelResult { result, action } => {
-                log::info!("Wheel result received: {} with action: {:?}", result, action);
+                log::info!(
+                    "Wheel result received: {} with action: {:?}",
+                    result,
+                    action
+                );
 
                 if let Some(wheel_action) = action {
                     handle_wheel_action(wheel_action, &backend_tx).await;
                 }
 
-                let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                    LogLevel::INFO,
-                    format!("Wheel landed on: {}", result),
-                )).await;
+                let _ = backend_tx
+                    .send(BackendToFrontendMessage::CreateLog(
+                        LogLevel::INFO,
+                        format!("Wheel landed on: {}", result),
+                    ))
+                    .await;
             }
-            OverlayClientMessage::PositionUpdate { element, x, y, scale } => {
-                log::info!("Position update for {}: ({}, {}) scale: {}", element, x, y, scale);
+            OverlayClientMessage::PositionUpdate {
+                element,
+                x,
+                y,
+                scale,
+            } => {
+                log::info!(
+                    "Position update for {}: ({}, {}) scale: {}",
+                    element,
+                    x,
+                    y,
+                    scale
+                );
                 handle_position_update(element, x, y, scale, &backend_tx).await;
             }
             OverlayClientMessage::RequestConfig => {
@@ -1179,39 +1230,56 @@ async fn handle_wheel_action(
 
     match action {
         WheelAction::Ban { username, reason } => {
-            let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                LogLevel::WARN,
-                format!("Wheel action: BAN {} - {}", username, reason),
-            )).await;
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::WARN,
+                    format!("Wheel action: BAN {} - {}", username, reason),
+                ))
+                .await;
             // TODO: Implement actual ban via Twitch client
             // This would require passing the TwitchClient to this handler
         }
-        WheelAction::Timeout { username, duration, reason } => {
-            let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                LogLevel::WARN,
-                format!("Wheel action: TIMEOUT {} for {}s - {}", username, duration, reason),
-            )).await;
+        WheelAction::Timeout {
+            username,
+            duration,
+            reason,
+        } => {
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::WARN,
+                    format!(
+                        "Wheel action: TIMEOUT {} for {}s - {}",
+                        username, duration, reason
+                    ),
+                ))
+                .await;
             // TODO: Implement actual timeout via Twitch client
         }
         WheelAction::Unban { username } => {
-            let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                LogLevel::INFO,
-                format!("Wheel action: UNBAN {}", username),
-            )).await;
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::INFO,
+                    format!("Wheel action: UNBAN {}", username),
+                ))
+                .await;
             // TODO: Implement actual unban via Twitch client
         }
         WheelAction::RunCommand { command } => {
-            let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                LogLevel::INFO,
-                format!("Wheel action: RUN COMMAND {}", command),
-            )).await;
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::INFO,
+                    format!("Wheel action: RUN COMMAND {}", command),
+                ))
+                .await;
             // TODO: Execute chat command
         }
         WheelAction::Nothing => {
-            let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-                LogLevel::INFO,
-                "Wheel action: Nothing happens".to_string(),
-            )).await;
+            let _ = backend_tx
+                .send(BackendToFrontendMessage::CreateLog(
+                    LogLevel::INFO,
+                    "Wheel action: Nothing happens".to_string(),
+                ))
+                .await;
         }
     }
 }
@@ -1225,7 +1293,12 @@ async fn handle_position_update(
 ) {
     // Validate position values
     if !x.is_finite() || !y.is_finite() || !scale.is_finite() {
-        log::warn!("Received invalid position values: x={}, y={}, scale={}", x, y, scale);
+        log::warn!(
+            "Received invalid position values: x={}, y={}, scale={}",
+            x,
+            y,
+            scale
+        );
         return;
     }
 
@@ -1272,8 +1345,13 @@ async fn handle_position_update(
 
     crate::backend::config::save_config(&config);
 
-    let _ = backend_tx.send(BackendToFrontendMessage::CreateLog(
-        LogLevel::INFO,
-        format!("Updated {} position to ({:.1}%, {:.1}%) with scale {:.2}x", element, x, y, scale),
-    )).await;
+    let _ = backend_tx
+        .send(BackendToFrontendMessage::CreateLog(
+            LogLevel::INFO,
+            format!(
+                "Updated {} position to ({:.1}%, {:.1}%) with scale {:.2}x",
+                element, x, y, scale
+            ),
+        ))
+        .await;
 }

@@ -117,6 +117,12 @@ pub struct ChatbotConfig {
     pub sound_format: crate::backend::sfx::Format,
     #[serde(default)]
     pub welcome_message: String,
+    #[serde(default = "default_token_refresh_url")]
+    pub token_refresh_url: String,
+}
+
+fn default_token_refresh_url() -> String {
+    "https://yamii.bieda.it/api/tokens/refresh".to_string()
 }
 
 pub struct Chatbot {

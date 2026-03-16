@@ -83,6 +83,7 @@ impl Chatbot {
                         client_id: self.config.client_id.clone(),
                         sound_format: self.config.sound_format.clone(),
                         welcome_message: self.config.welcome_message.clone(),
+                        token_refresh_url: self.config.token_refresh_url.clone(),
                     }))
                     .unwrap();
             }

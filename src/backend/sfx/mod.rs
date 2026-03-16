@@ -2,7 +2,7 @@ mod sounds;
 mod watcher;
 use serde::{Deserialize, Serialize};
 
-use rodio::OutputStream;
+use rodio::stream::MixerDeviceSink;
 
 use std::{
     collections::HashSet,
@@ -37,7 +37,7 @@ pub struct SoundsManager {
     #[allow(dead_code)] // Reserved for filtering unwanted sounds
     ignore_list: HashSet<String>,
 
-    stream: OutputStream,
+    stream: MixerDeviceSink,
 }
 
 impl SoundsManager {
@@ -53,7 +53,7 @@ impl SoundsManager {
 
         let soundlist = Soundlist::serve().await?;
 
-        let stream = rodio::OutputStreamBuilder::open_default_stream()
+        let stream = rodio::DeviceSinkBuilder::open_default_sink()
             .expect("Failed to open default audio stream");
 
         Ok(Self {
@@ -73,7 +73,7 @@ impl SoundsManager {
         &self.watcher
     }
 
-    pub fn get_stream(self) -> OutputStream {
+    pub fn get_stream(self) -> MixerDeviceSink {
         self.stream
     }
 }

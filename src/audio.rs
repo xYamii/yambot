@@ -1,10 +1,12 @@
 use crate::backend::tts::{TTSQueue, TTSQueueItem};
 use crate::ui::{BackendToFrontendMessage, TTSQueueItemUI};
 use log::{error, info};
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, Player};
+use rodio::stream::MixerDeviceSink;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::Arc;
 
 // Audio playback request for SFX system
 #[derive(Debug, Clone)]
@@ -33,12 +35,12 @@ impl AudioPlaybackSender {
     }
 }
 
-// Dedicated audio playback task that owns the OutputStream
-// This solves the Send issue on macOS by keeping OutputStream in a single blocking thread
+// Dedicated audio playback task that owns the MixerDeviceSink
+// This solves the Send issue on macOS by keeping MixerDeviceSink in a single blocking thread
 // Handles both sound effects and TTS audio files
 pub fn audio_playback_task(
     rx: std::sync::mpsc::Receiver<AudioPlaybackRequest>,
-    stream: OutputStream,
+    stream: MixerDeviceSink,
 ) {
     while let Ok(request) = rx.recv() {
         let audio_path = if request.is_full_path {
@@ -49,7 +51,7 @@ pub fn audio_playback_task(
 
         if let Ok(file) = File::open(Path::new(&audio_path)) {
             if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                let sink = Sink::connect_new(stream.mixer());
+                let sink = Player::connect_new(stream.mixer());
                 sink.set_volume(request.volume);
                 sink.append(source);
                 sink.detach();
@@ -66,6 +68,7 @@ pub fn audio_playback_task(
 pub async fn tts_player_task(
     queue: TTSQueue,
     backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+    stream: Arc<MixerDeviceSink>,
 ) {
     info!("TTS player task started");
 
@@ -98,7 +101,7 @@ pub async fn tts_player_task(
             );
 
             // Play audio chunks from memory
-            play_tts_item(&item, volume, &queue).await;
+            play_tts_item(&item, volume, &queue, &stream).await;
 
             // Clear skip flag
             queue.clear_skip();
@@ -134,32 +137,28 @@ async fn send_queue_update(
         .await;
 }
 
-async fn play_tts_item(item: &TTSQueueItem, volume: f32, queue: &TTSQueue) {
+async fn play_tts_item(item: &TTSQueueItem, volume: f32, queue: &TTSQueue, stream: &Arc<MixerDeviceSink>) {
     let audio_chunks = item.audio_chunks.clone();
     let chunk_count = audio_chunks.len();
     let skip_flag = queue.get_skip_flag();
 
+    // Clone Arc for the blocking task
+    let stream = Arc::clone(stream);
+
     match tokio::task::spawn_blocking(move || {
-        // Create audio stream for TTS playback
-        let stream = match rodio::OutputStreamBuilder::open_default_stream() {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to open TTS audio stream: {}", e);
-                return Err(format!("Failed to open audio stream: {}", e));
-            }
-        };
+        // Use the passed stream instead of creating a new one
 
         // Play each audio chunk synchronously
         for (index, chunk) in audio_chunks.iter().enumerate() {
             // Check skip flag before playing each chunk
             if skip_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 info!("Skip detected, stopping playback");
-                return Ok(());
+                return Ok::<(), String>(());
             }
 
             let cursor = std::io::Cursor::new(chunk.audio_data.clone());
             if let Ok(source) = Decoder::new(BufReader::new(cursor)) {
-                let sink = Sink::connect_new(stream.mixer());
+                let sink = Player::connect_new(stream.mixer());
                 sink.set_volume(volume);
                 sink.append(source);
 
@@ -168,7 +167,7 @@ async fn play_tts_item(item: &TTSQueueItem, volume: f32, queue: &TTSQueue) {
                     if skip_flag.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("Skip detected during playback, stopping");
                         sink.stop();
-                        return Ok(());
+                        return Ok::<(), String>(());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
@@ -188,7 +187,7 @@ async fn play_tts_item(item: &TTSQueueItem, volume: f32, queue: &TTSQueue) {
             }
         }
 
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
     {

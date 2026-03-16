@@ -49,8 +49,8 @@ async fn main() {
     let (audio_tx, audio_rx) = std::sync::mpsc::channel::<audio::AudioPlaybackRequest>();
     let audio_tx = AudioPlaybackSender(audio_tx);
     std::thread::spawn(move || {
-        // Create the OutputStream inside the thread to avoid Send issues on macOS
-        let stream = rodio::OutputStreamBuilder::open_default_stream()
+        // Create the MixerDeviceSink inside the thread to avoid Send issues on macOS
+        let stream = rodio::DeviceSinkBuilder::open_default_sink()
             .expect("Failed to open default audio stream");
         audio_playback_task(audio_rx, stream);
     });
@@ -60,11 +60,20 @@ async fn main() {
     let tts_service = Arc::new(backend::tts::TTSService::new(tts_queue.clone()));
     let language_config = Arc::new(RwLock::new(backend::tts::load_language_config()));
 
+    // Create dedicated audio stream for TTS playback
+    let tts_stream = Arc::new({
+        let mut stream = rodio::DeviceSinkBuilder::open_default_sink()
+            .expect("Failed to open TTS audio stream");
+        stream.log_on_drop(false); // Suppress drop warning since we're reusing the stream
+        stream
+    });
+
     // Start TTS player task using tokio
     let tts_queue_for_player = tts_queue.clone();
     let backend_tx_for_player = backend_tx.clone();
+    let tts_stream_for_player = Arc::clone(&tts_stream);
     tokio::spawn(async move {
-        tts_player_task(tts_queue_for_player, backend_tx_for_player).await;
+        tts_player_task(tts_queue_for_player, backend_tx_for_player, tts_stream_for_player).await;
     });
 
     // Initialize overlay server if enabled
