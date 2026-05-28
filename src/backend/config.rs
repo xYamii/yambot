@@ -6,6 +6,14 @@ use std::path::Path;
 use crate::backend::commands::CommandRegistry;
 use crate::ui::{ChatbotConfig, Config};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SongRequestConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub youtube_api_key: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     #[serde(default)]
@@ -15,6 +23,8 @@ pub struct AppConfig {
     pub tts: Config,
     #[serde(default)]
     pub overlay: OverlayConfig,
+    #[serde(default)]
+    pub song_request: SongRequestConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

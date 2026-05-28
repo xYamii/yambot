@@ -55,6 +55,9 @@ async fn main() {
         audio_playback_task(audio_rx, stream);
     });
 
+    // Initialize song request queue
+    let song_queue = backend::songrequest::SongRequestQueue::new();
+
     // Initialize TTS system
     let tts_queue = backend::tts::TTSQueue::new();
     let tts_service = Arc::new(backend::tts::TTSService::new(tts_queue.clone()));
@@ -97,6 +100,7 @@ async fn main() {
     let tts_service_clone = tts_service.clone();
     let language_config_clone = language_config.clone();
     let overlay_ws_clone = overlay_ws_state.clone();
+    let song_queue_clone = song_queue.clone();
     tokio::spawn(async move {
         handlers::handle_frontend_to_backend_messages(
             backend_rx,
@@ -107,6 +111,7 @@ async fn main() {
             tts_service_clone,
             language_config_clone,
             overlay_ws_clone,
+            song_queue_clone,
         )
         .await;
     });
@@ -151,6 +156,7 @@ async fn main() {
                 commands,
                 config.overlay.enabled,
                 config.overlay.port,
+                config.song_request,
             )))
         }),
     )

@@ -6,6 +6,7 @@ pub mod home;
 pub mod overlay;
 pub mod settings;
 pub mod sfx;
+pub mod songrequest;
 pub mod theme;
 pub mod tts;
 
@@ -16,6 +17,7 @@ enum Section {
     Sfx,
     Tts,
     Commands,
+    SongRequest,
     Overlay,
     Settings,
 }
@@ -35,12 +37,27 @@ pub enum FrontendToBackendMessage {
     GetTTSQueue,
     SkipTTSMessage(String), // Skip by message ID
     SkipCurrentTTS,
+    // Song request messages
+    GetSongQueue,
+    RemoveSongRequest(String),
+    SkipCurrentSong,
+    UpdateSongRequestConfig(crate::backend::config::SongRequestConfig),
     // Overlay messages
     EnableOverlay,
     DisableOverlay,
     TestOverlayWheel,
     // UI messages
     UpdateUIConfig(String), // theme name
+}
+
+#[derive(Debug, Clone)]
+pub struct SongRequestUI {
+    pub id: String,
+    pub title: String,
+    pub channel: String,
+    pub duration: String,
+    pub requested_by: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +79,7 @@ pub enum BackendToFrontendMessage {
     CommandExecuted(String, String), // (command_name, result)
     CommandsUpdated,
     TTSQueueUpdated(Vec<TTSQueueItemUI>),
+    SongQueueUpdated(Vec<SongRequestUI>),
     // Overlay messages
     OverlayStatusChanged(bool), // enabled/disabled
     // UI messages
@@ -130,6 +148,8 @@ pub struct Chatbot {
     tts_config: Config,
     tts_languages: Vec<crate::backend::tts::Language>,
     tts_queue: Vec<TTSQueueItemUI>,
+    song_queue: Vec<SongRequestUI>,
+    song_request_config: crate::backend::config::SongRequestConfig,
     commands: Vec<crate::backend::commands::Command>,
     editing_command: Option<EditingCommand>,
     overlay_enabled: bool,
@@ -160,6 +180,7 @@ impl Chatbot {
         commands: Vec<crate::backend::commands::Command>,
         overlay_enabled: bool,
         overlay_port: u16,
+        song_request_config: crate::backend::config::SongRequestConfig,
     ) -> Self {
         // Apply the theme to the egui context
         theme::apply_theme(&cc.egui_ctx, theme);
@@ -178,6 +199,8 @@ impl Chatbot {
             tts_config,
             tts_languages,
             tts_queue: Vec::new(),
+            song_queue: Vec::new(),
+            song_request_config,
             commands,
             editing_command: None,
             overlay_enabled,
@@ -253,6 +276,18 @@ impl eframe::App for Chatbot {
                                 self.selected_section = Section::Commands;
                             }
 
+                            // SONG REQUEST button
+                            let sr_btn = if matches!(self.selected_section, Section::SongRequest) {
+                                egui::Button::new(egui::RichText::new("SONG REQUEST").strong())
+                                    .fill(Color32::from_rgb(60, 60, 80))
+                            } else {
+                                egui::Button::new("SONG REQUEST")
+                            };
+                            if ui.add_sized([110.0, 30.0], sr_btn).clicked() {
+                                self.selected_section = Section::SongRequest;
+                                let _ = self.frontend_tx.try_send(FrontendToBackendMessage::GetSongQueue);
+                            }
+
                             // OVERLAY button
                             let overlay_btn = if matches!(self.selected_section, Section::Overlay) {
                                 egui::Button::new(egui::RichText::new("OVERLAY").strong())
@@ -300,6 +335,7 @@ impl eframe::App for Chatbot {
             Section::Sfx => self.show_sfx(ui),
             Section::Tts => self.show_tts(ui),
             Section::Commands => self.show_commands(ui),
+            Section::SongRequest => self.show_song_request(ui),
             Section::Overlay => self.show_overlay(ui),
             Section::Settings => self.show_settings(ui),
         });
@@ -337,6 +373,9 @@ impl eframe::App for Chatbot {
                 }
                 BackendToFrontendMessage::TTSQueueUpdated(queue) => {
                     self.tts_queue = queue;
+                }
+                BackendToFrontendMessage::SongQueueUpdated(queue) => {
+                    self.song_queue = queue;
                 }
                 BackendToFrontendMessage::SFXListUpdated => {
                     // Sound list has been updated by the file watcher

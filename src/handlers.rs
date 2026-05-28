@@ -5,9 +5,12 @@ use crate::backend::tts::{
     LanguageConfig, TTSAudioChunk, TTSQueue, TTSQueueItem, TTSRequest, TTSService,
 };
 use crate::backend::twitch::{TwitchClient, TwitchClientEvent, TwitchConfig};
+use crate::backend::songrequest::{
+    extract_video_id, fetch_video_metadata, SongRequest, SongRequestQueue,
+};
 use crate::ui::{
     BackendToFrontendMessage, ChatbotConfig, Config, FrontendToBackendMessage, LogLevel,
-    TTSQueueItemUI,
+    SongRequestUI, TTSQueueItemUI,
 };
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -100,6 +103,7 @@ pub async fn handle_twitch_messages(
     tts_queue: TTSQueue,
     tts_service: Arc<TTSService>,
     language_config: Arc<RwLock<LanguageConfig>>,
+    song_queue: SongRequestQueue,
     welcome_message: Option<String>,
 ) {
     // TODO: add messages to local db
@@ -160,6 +164,7 @@ pub async fn handle_twitch_messages(
             &tts_queue,
             &tts_service,
             &language_config,
+            &song_queue,
         )
         .await;
     }
@@ -219,6 +224,7 @@ async fn handle_twitch_event(
     tts_queue: &TTSQueue,
     tts_service: &Arc<TTSService>,
     language_config: &Arc<RwLock<LanguageConfig>>,
+    song_queue: &SongRequestQueue,
 ) {
     match event {
         TwitchClientEvent::Connected => {
@@ -233,6 +239,12 @@ async fn handle_twitch_event(
         TwitchClientEvent::ChatEvent(chat_event) => match chat_event {
             crate::backend::twitch::TwitchEvent::ChatMessage(msg) => {
                 let chat_message: ChatMessage = (&msg).into();
+
+                // Check if message is a song request command
+                if handle_song_request_commands(&msg, song_queue, client, backend_tx).await {
+                    messages.push(chat_message);
+                    return;
+                }
 
                 // Check if message is a TTS command
                 if handle_tts_command(&msg, tts_queue, tts_service, language_config, backend_tx)
@@ -380,6 +392,111 @@ async fn handle_twitch_event(
                 .await;
         }
     }
+}
+
+async fn send_song_queue_to_frontend(
+    song_queue: &SongRequestQueue,
+    backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+) {
+    let items = song_queue.get_all().await;
+    let ui_queue: Vec<SongRequestUI> = items
+        .into_iter()
+        .map(|r| SongRequestUI {
+            id: r.id,
+            title: r.title,
+            channel: r.channel,
+            duration: r.duration,
+            requested_by: r.requested_by,
+            url: r.url,
+        })
+        .collect();
+    let _ = backend_tx.try_send(BackendToFrontendMessage::SongQueueUpdated(ui_queue));
+}
+
+async fn handle_song_request_commands(
+    msg: &crate::backend::twitch::ChatMessageEvent,
+    song_queue: &SongRequestQueue,
+    client: &mut TwitchClient,
+    backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+) -> bool {
+    let text = msg.message.text.trim();
+    let lower = text.to_lowercase();
+
+    let is_mod_or_broadcaster = msg.badges.iter().any(|b| {
+        b.set_id == "moderator" || b.set_id == "broadcaster"
+    });
+
+    if lower.starts_with("!sr ") || lower == "!sr" {
+        let config = crate::backend::config::load_config();
+        if !config.song_request.enabled {
+            return true;
+        }
+
+        let url = text.splitn(2, ' ').nth(1).unwrap_or("").trim();
+        let Some(video_id) = extract_video_id(url) else {
+            let reply = format!("@{} Invalid YouTube link. Usage: !sr <youtube_url>", msg.chatter_user_login);
+            let _ = client.send_message(&reply).await;
+            return true;
+        };
+
+        let api_key = config.song_request.youtube_api_key.clone();
+        let url_owned = url.to_string();
+        let username = msg.chatter_user_login.clone();
+        let message_id = msg.message_id.clone();
+        let song_queue_clone = song_queue.clone();
+        let backend_tx_clone = backend_tx.clone();
+
+        tokio::spawn(async move {
+            match fetch_video_metadata(&api_key, &video_id, &url_owned).await {
+                Ok((title, channel, duration)) => {
+                    let req = SongRequest {
+                        id: message_id,
+                        youtube_id: video_id,
+                        url: url_owned,
+                        title: title.clone(),
+                        channel,
+                        duration: duration.clone(),
+                        requested_by: username,
+                    };
+                    song_queue_clone.add(req).await;
+                    send_song_queue_to_frontend(&song_queue_clone, &backend_tx_clone).await;
+                    let _ = backend_tx_clone.try_send(BackendToFrontendMessage::CreateLog(
+                        LogLevel::INFO,
+                        format!("Song added to queue: {} [{}]", title, duration),
+                    ));
+                }
+                Err(e) => {
+                    let _ = backend_tx_clone.try_send(BackendToFrontendMessage::CreateLog(
+                        LogLevel::ERROR,
+                        format!("Failed to fetch song metadata: {}", e),
+                    ));
+                }
+            }
+        });
+        return true;
+    }
+
+    if lower == "!wrongsong" {
+        let removed = song_queue.remove_last_by_user(&msg.chatter_user_login).await;
+        if removed {
+            send_song_queue_to_frontend(song_queue, backend_tx).await;
+        }
+        return true;
+    }
+
+    if lower == "!skip" {
+        if !is_mod_or_broadcaster {
+            return true;
+        }
+        if let Some(skipped) = song_queue.skip_current().await {
+            send_song_queue_to_frontend(song_queue, backend_tx).await;
+            let reply = format!("Skipped: {}", skipped.title);
+            let _ = client.send_message(&reply).await;
+        }
+        return true;
+    }
+
+    false
 }
 
 async fn handle_tts_command(
@@ -676,6 +793,7 @@ pub async fn handle_frontend_to_backend_messages(
     tts_service: Arc<TTSService>,
     language_config: Arc<RwLock<LanguageConfig>>,
     overlay_ws_state: crate::backend::overlay::WebSocketState,
+    song_queue: SongRequestQueue,
 ) {
     // Store the handle to the twitch message handler task so we can abort it on disconnect
     let mut twitch_task_handle: Option<tokio::task::JoinHandle<()>> = None;
@@ -705,6 +823,7 @@ pub async fn handle_frontend_to_backend_messages(
                     &tts_queue,
                     &tts_service,
                     &language_config,
+                    &song_queue,
                 )
                 .await;
             }
@@ -743,6 +862,22 @@ pub async fn handle_frontend_to_backend_messages(
             }
             FrontendToBackendMessage::UpdateUIConfig(theme_name) => {
                 handle_update_ui_config(theme_name, &backend_tx).await;
+            }
+            FrontendToBackendMessage::UpdateSongRequestConfig(sr_config) => {
+                let mut current = crate::backend::config::load_config();
+                current.song_request = sr_config;
+                crate::backend::config::save_config(&current);
+            }
+            FrontendToBackendMessage::GetSongQueue => {
+                send_song_queue_to_frontend(&song_queue, &backend_tx).await;
+            }
+            FrontendToBackendMessage::RemoveSongRequest(id) => {
+                song_queue.remove_by_id(&id).await;
+                send_song_queue_to_frontend(&song_queue, &backend_tx).await;
+            }
+            FrontendToBackendMessage::SkipCurrentSong => {
+                song_queue.skip_current().await;
+                send_song_queue_to_frontend(&song_queue, &backend_tx).await;
             }
         }
     }
@@ -813,6 +948,7 @@ fn update_tts_config(
         sfx: current_config.sfx,
         tts: config,
         overlay: current_config.overlay,
+        song_request: current_config.song_request,
     });
     let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
         LogLevel::INFO,
@@ -831,6 +967,7 @@ fn update_sfx_config(
         sfx: config,
         tts: current_config.tts,
         overlay: current_config.overlay,
+        song_request: current_config.song_request,
     });
     let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
         LogLevel::INFO,
@@ -849,6 +986,7 @@ fn update_chatbot_config(
         sfx: current_config.sfx,
         tts: current_config.tts,
         overlay: current_config.overlay,
+        song_request: current_config.song_request,
     });
     let _ = backend_tx.try_send(BackendToFrontendMessage::CreateLog(
         LogLevel::INFO,
@@ -880,6 +1018,7 @@ async fn connect_to_chat(
     tts_queue: &TTSQueue,
     tts_service: &Arc<TTSService>,
     language_config: &Arc<RwLock<LanguageConfig>>,
+    song_queue: &SongRequestQueue,
 ) {
     // Abort any existing connection first
     if let Some(handle) = twitch_task_handle.take() {
@@ -912,6 +1051,7 @@ async fn connect_to_chat(
     let tts_queue_clone = tts_queue.clone();
     let tts_service_clone = tts_service.clone();
     let language_config_clone = language_config.clone();
+    let song_queue_clone = song_queue.clone();
 
     // Spawn the twitch handler task and store the handle
     let handle = tokio::spawn(async move {
@@ -923,6 +1063,7 @@ async fn connect_to_chat(
             tts_queue_clone,
             tts_service_clone,
             language_config_clone,
+            song_queue_clone,
             welcome_message,
         )
         .await;

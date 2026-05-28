@@ -73,6 +73,31 @@ impl Chatbot {
             });
             ui.add_space(10.0);
 
+            ui.separator();
+            ui.add_space(10.0);
+            ui.heading("Song Request");
+            ui.horizontal(|ui| {
+                ui.label("Enabled:");
+                ui.checkbox(&mut self.song_request_config.enabled, "");
+            });
+            ui.horizontal(|ui| {
+                ui.label("YouTube API key:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.song_request_config.youtube_api_key)
+                        .password(true)
+                        .hint_text("AIza..."),
+                );
+            });
+            ui.label("(YouTube Data API v3 key — used to fetch song titles)");
+            if ui.button("Save Song Request Settings").clicked() {
+                let _ = self.frontend_tx.try_send(
+                    FrontendToBackendMessage::UpdateSongRequestConfig(
+                        self.song_request_config.clone(),
+                    ),
+                );
+            }
+            ui.add_space(10.0);
+
             if ui.button("Save").clicked() {
                 let _ = self
                     .frontend_tx
