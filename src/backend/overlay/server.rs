@@ -63,7 +63,7 @@ fn create_router(overlay_dir: PathBuf, ws_state: WebSocketState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(websocket_handler))
-        .nest_service("/", serve_dir)
+        .fallback_service(serve_dir)
         .layer(cors)
         .with_state(ws_state)
 }

@@ -41,6 +41,8 @@ pub enum FrontendToBackendMessage {
     GetSongQueue,
     RemoveSongRequest(String),
     SkipCurrentSong,
+    PauseSong,
+    ResumeSong,
     UpdateSongRequestConfig(crate::backend::config::SongRequestConfig),
     // Overlay messages
     EnableOverlay,
@@ -150,6 +152,7 @@ pub struct Chatbot {
     tts_queue: Vec<TTSQueueItemUI>,
     song_queue: Vec<SongRequestUI>,
     song_request_config: crate::backend::config::SongRequestConfig,
+    song_paused: bool,
     commands: Vec<crate::backend::commands::Command>,
     editing_command: Option<EditingCommand>,
     overlay_enabled: bool,
@@ -201,6 +204,7 @@ impl Chatbot {
             tts_queue: Vec::new(),
             song_queue: Vec::new(),
             song_request_config,
+            song_paused: false,
             commands,
             editing_command: None,
             overlay_enabled,
@@ -218,10 +222,13 @@ impl eframe::App for Chatbot {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
 
-                // Left section: Logo and title
-                ui.horizontal(|ui| {
-                    ui.image(egui::include_image!("../../assets/img/logo.png"));
-                    ui.heading("Yambot");
+                // Left section: Logo, title, status
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.image(egui::include_image!("../../assets/img/logo.png"));
+                        ui.heading("Yambot");
+                    });
+                    ui.label(format!("Status: {}", self.labels.bot_status));
                 });
 
                 // Center section: Navigation buttons
@@ -313,11 +320,6 @@ impl eframe::App for Chatbot {
                         });
                     },
                 );
-
-                // Right section: Status or empty space for balance
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Status: {}", self.labels.bot_status));
-                });
             });
 
             ui.add_space(5.0);
@@ -376,6 +378,9 @@ impl eframe::App for Chatbot {
                 }
                 BackendToFrontendMessage::SongQueueUpdated(queue) => {
                     self.song_queue = queue;
+                    if self.song_queue.is_empty() {
+                        self.song_paused = false;
+                    }
                 }
                 BackendToFrontendMessage::SFXListUpdated => {
                     // Sound list has been updated by the file watcher

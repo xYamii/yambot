@@ -6,12 +6,33 @@ use std::path::Path;
 use crate::backend::commands::CommandRegistry;
 use crate::ui::{ChatbotConfig, Config};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SongRequestConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub youtube_api_key: String,
+    #[serde(default = "default_sr_volume")]
+    pub volume: u8,
+    #[serde(default = "default_title_visible")]
+    pub title_visible: bool,
+    #[serde(default)]
+    pub video_visible: bool,
+}
+
+fn default_sr_volume() -> u8 { 50 }
+fn default_title_visible() -> bool { true }
+
+impl Default for SongRequestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            youtube_api_key: String::new(),
+            volume: default_sr_volume(),
+            title_visible: default_title_visible(),
+            video_visible: false,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -55,6 +76,12 @@ pub struct OverlayConfig {
     pub reward_bindings: HashMap<String, RewardAction>,
     #[serde(default)]
     pub positions: OverlayPositions,
+    #[serde(default = "default_player_visible")]
+    pub player_visible: bool,
+}
+
+fn default_player_visible() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -67,6 +94,12 @@ pub struct OverlayPositions {
     pub image: ElementPosition,
     #[serde(default)]
     pub text: ElementPosition,
+    #[serde(default = "default_player_position")]
+    pub player: ElementPosition,
+}
+
+fn default_player_position() -> ElementPosition {
+    ElementPosition { x: 10.0, y: 90.0, scale: 1.0 }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -84,6 +117,7 @@ impl Default for OverlayPositions {
             alert: ElementPosition { x: 85.0, y: 10.0, scale: 1.0 },
             image: ElementPosition { x: 50.0, y: 50.0, scale: 1.0 },
             text: ElementPosition { x: 50.0, y: 80.0, scale: 1.0 },
+            player: ElementPosition { x: 10.0, y: 90.0, scale: 1.0 },
         }
     }
 }
@@ -114,6 +148,7 @@ impl Default for OverlayConfig {
             port: default_overlay_port(),
             reward_bindings: HashMap::new(),
             positions: OverlayPositions::default(),
+            player_visible: default_player_visible(),
         }
     }
 }

@@ -90,8 +90,16 @@ async fn main() {
 
     // Spawn task to handle messages from overlay clients
     let backend_tx_overlay = backend_tx.clone();
+    let song_queue_for_overlay = song_queue.clone();
+    let overlay_ws_for_client = overlay_ws_state.clone();
     tokio::spawn(async move {
-        handlers::handle_overlay_client_messages(overlay_client_rx, backend_tx_overlay).await;
+        handlers::handle_overlay_client_messages(
+            overlay_client_rx,
+            backend_tx_overlay,
+            song_queue_for_overlay,
+            overlay_ws_for_client,
+        )
+        .await;
     });
 
     let registry_clone = shared_registry.clone();

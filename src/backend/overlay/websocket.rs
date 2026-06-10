@@ -108,6 +108,26 @@ pub enum OverlayEvent {
     ConfigUpdate {
         positions: serde_json::Value,
     },
+    /// Start playing a song in the overlay player
+    PlaySong {
+        video_id: String,
+        title: String,
+    },
+    /// Stop the overlay player
+    StopPlayer,
+    /// Set the player volume (0–100)
+    SetPlayerVolume {
+        volume: u8,
+    },
+    /// Update player display settings
+    PlayerSettingsUpdate {
+        title_visible: bool,
+        video_visible: bool,
+    },
+    /// Pause the overlay player
+    PausePlayer,
+    /// Resume the overlay player
+    ResumePlayer,
 }
 
 /// Messages that can be received from the overlay client
@@ -129,6 +149,20 @@ pub enum OverlayClientMessage {
     },
     /// Request current configuration
     RequestConfig,
+    /// Overlay player finished playing a song
+    SongEnded,
+    /// Toggle the whole player widget visibility
+    PlayerVisibilityUpdate {
+        visible: bool,
+    },
+    /// Toggle video visibility
+    VideoVisibilityUpdate {
+        visible: bool,
+    },
+    /// Toggle title visibility
+    TitleVisibilityUpdate {
+        visible: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +197,16 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
 
     // Task to receive events from the broadcast channel and send to client
     let mut send_task = tokio::spawn(async move {
-        while let Ok(event) = rx.recv().await {
+        loop {
+            let event = match rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("Overlay client lagged, skipped {} messages", n);
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             // Serialize event to JSON
             let json = match serde_json::to_string(&event) {
                 Ok(json) => json,

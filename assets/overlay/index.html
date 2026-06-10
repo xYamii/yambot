@@ -14,6 +14,18 @@
         <div id="wheel-result" class="hidden"></div>
     </div>
 
+    <!-- Song Player -->
+    <div id="player-container" class="hidden">
+        <!-- Video wrapper: hidden = audio-only mode, visible = shows actual video -->
+        <div id="player-video-wrapper" class="video-hidden">
+            <div id="yt-iframe"></div>
+        </div>
+        <p id="player-title"></p>
+        <div id="player-progress-bg">
+            <div id="player-progress-fill"></div>
+        </div>
+    </div>
+
     <!-- Debug Info (hidden in production) -->
     <div id="debug-info" class="debug-panel hidden">
         <h3>Debug Info</h3>
@@ -22,6 +34,8 @@
     </div>
 
     <script src="js/wheel.js"></script>
+    <script src="js/player.js"></script>
     <script src="js/main.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
 </body>
 </html>

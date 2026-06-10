@@ -70,9 +70,12 @@ pub fn extract_video_id(url: &str) -> Option<String> {
     if let Some(rest) = url.strip_prefix("https://youtu.be/")
         .or_else(|| url.strip_prefix("http://youtu.be/"))
     {
-        let id = rest.split('?').next()?.trim();
+        let raw = rest.split('?').next().unwrap_or("").trim();
+        let id: String = raw.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
         if id.len() == 11 {
-            return Some(id.to_string());
+            return Some(id);
         }
     }
 
@@ -80,9 +83,13 @@ pub fn extract_video_id(url: &str) -> Option<String> {
     if url.contains("youtube.com/watch") {
         for param in url.split('?').nth(1).unwrap_or("").split('&') {
             if let Some(id) = param.strip_prefix("v=") {
-                let id = id.split('&').next()?.trim();
+                let id = id.split('&').next().unwrap_or("").trim();
+                // Strip any invisible/non-standard chars Twitch appends (e.g. U+034F)
+                let id: String = id.chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
                 if id.len() == 11 {
-                    return Some(id.to_string());
+                    return Some(id);
                 }
             }
         }

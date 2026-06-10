@@ -35,3 +35,11 @@ scale = 1.0
 
 # NOTE: To configure overlay positions, open http://localhost:3000?config=true
 # Press 'C' to toggle config mode and drag elements to reposition them
+
+
+[song_request]
+enabled = true
+youtube_api_key = ""
+volume = 100
+title_visible = false
+video_visible = true

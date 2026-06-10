@@ -5,6 +5,7 @@ use crate::backend::tts::{
     LanguageConfig, TTSAudioChunk, TTSQueue, TTSQueueItem, TTSRequest, TTSService,
 };
 use crate::backend::twitch::{TwitchClient, TwitchClientEvent, TwitchConfig};
+use crate::backend::overlay::websocket::{OverlayEvent, WebSocketState};
 use crate::backend::songrequest::{
     extract_video_id, fetch_video_metadata, SongRequest, SongRequestQueue,
 };
@@ -104,6 +105,7 @@ pub async fn handle_twitch_messages(
     tts_service: Arc<TTSService>,
     language_config: Arc<RwLock<LanguageConfig>>,
     song_queue: SongRequestQueue,
+    overlay_ws: WebSocketState,
     welcome_message: Option<String>,
 ) {
     // TODO: add messages to local db
@@ -165,6 +167,7 @@ pub async fn handle_twitch_messages(
             &tts_service,
             &language_config,
             &song_queue,
+            &overlay_ws,
         )
         .await;
     }
@@ -225,6 +228,7 @@ async fn handle_twitch_event(
     tts_service: &Arc<TTSService>,
     language_config: &Arc<RwLock<LanguageConfig>>,
     song_queue: &SongRequestQueue,
+    overlay_ws: &WebSocketState,
 ) {
     match event {
         TwitchClientEvent::Connected => {
@@ -241,7 +245,7 @@ async fn handle_twitch_event(
                 let chat_message: ChatMessage = (&msg).into();
 
                 // Check if message is a song request command
-                if handle_song_request_commands(&msg, song_queue, client, backend_tx).await {
+                if handle_song_request_commands(&msg, song_queue, client, backend_tx, overlay_ws).await {
                     messages.push(chat_message);
                     return;
                 }
@@ -394,6 +398,19 @@ async fn handle_twitch_event(
     }
 }
 
+async fn broadcast_next_song(song_queue: &SongRequestQueue, ws: &WebSocketState) {
+    let all = song_queue.get_all().await;
+    if let Some(next) = all.first() {
+        ws.broadcast(OverlayEvent::PlaySong {
+            video_id: next.youtube_id.clone(),
+            title: next.title.clone(),
+        })
+        .await;
+    } else {
+        ws.broadcast(OverlayEvent::StopPlayer).await;
+    }
+}
+
 async fn send_song_queue_to_frontend(
     song_queue: &SongRequestQueue,
     backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
@@ -418,6 +435,7 @@ async fn handle_song_request_commands(
     song_queue: &SongRequestQueue,
     client: &mut TwitchClient,
     backend_tx: &tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+    overlay_ws: &WebSocketState,
 ) -> bool {
     let text = msg.message.text.trim();
     let lower = text.to_lowercase();
@@ -445,6 +463,7 @@ async fn handle_song_request_commands(
         let message_id = msg.message_id.clone();
         let song_queue_clone = song_queue.clone();
         let backend_tx_clone = backend_tx.clone();
+        let overlay_ws_clone = overlay_ws.clone();
 
         tokio::spawn(async move {
             match fetch_video_metadata(&api_key, &video_id, &url_owned).await {
@@ -458,7 +477,11 @@ async fn handle_song_request_commands(
                         duration: duration.clone(),
                         requested_by: username,
                     };
+                    let was_empty = song_queue_clone.get_all().await.is_empty();
                     song_queue_clone.add(req).await;
+                    if was_empty {
+                        broadcast_next_song(&song_queue_clone, &overlay_ws_clone).await;
+                    }
                     send_song_queue_to_frontend(&song_queue_clone, &backend_tx_clone).await;
                     let _ = backend_tx_clone.try_send(BackendToFrontendMessage::CreateLog(
                         LogLevel::INFO,
@@ -476,6 +499,23 @@ async fn handle_song_request_commands(
         return true;
     }
 
+    if lower.starts_with("!volume ") || lower == "!volume" {
+        if !is_mod_or_broadcaster {
+            return true;
+        }
+        let vol_str = text.splitn(2, ' ').nth(1).unwrap_or("").trim();
+        if let Ok(vol) = vol_str.parse::<u32>() {
+            if vol <= 100 {
+                let vol = vol as u8;
+                overlay_ws.broadcast(OverlayEvent::SetPlayerVolume { volume: vol }).await;
+                let mut config = crate::backend::config::load_config();
+                config.song_request.volume = vol;
+                crate::backend::config::save_config(&config);
+            }
+        }
+        return true;
+    }
+
     if lower == "!wrongsong" {
         let removed = song_queue.remove_last_by_user(&msg.chatter_user_login).await;
         if removed {
@@ -489,6 +529,7 @@ async fn handle_song_request_commands(
             return true;
         }
         if let Some(skipped) = song_queue.skip_current().await {
+            broadcast_next_song(song_queue, overlay_ws).await;
             send_song_queue_to_frontend(song_queue, backend_tx).await;
             let reply = format!("Skipped: {}", skipped.title);
             let _ = client.send_message(&reply).await;
@@ -824,6 +865,7 @@ pub async fn handle_frontend_to_backend_messages(
                     &tts_service,
                     &language_config,
                     &song_queue,
+                    &overlay_ws_state,
                 )
                 .await;
             }
@@ -864,9 +906,22 @@ pub async fn handle_frontend_to_backend_messages(
                 handle_update_ui_config(theme_name, &backend_tx).await;
             }
             FrontendToBackendMessage::UpdateSongRequestConfig(sr_config) => {
+                overlay_ws_state.broadcast(OverlayEvent::PlayerSettingsUpdate {
+                    title_visible: sr_config.title_visible,
+                    video_visible: sr_config.video_visible,
+                }).await;
                 let mut current = crate::backend::config::load_config();
+                // Preserve volume — only set via !volume chat command
+                let saved_volume = current.song_request.volume;
                 current.song_request = sr_config;
+                current.song_request.volume = saved_volume;
                 crate::backend::config::save_config(&current);
+            }
+            FrontendToBackendMessage::PauseSong => {
+                overlay_ws_state.broadcast(OverlayEvent::PausePlayer).await;
+            }
+            FrontendToBackendMessage::ResumeSong => {
+                overlay_ws_state.broadcast(OverlayEvent::ResumePlayer).await;
             }
             FrontendToBackendMessage::GetSongQueue => {
                 send_song_queue_to_frontend(&song_queue, &backend_tx).await;
@@ -877,6 +932,7 @@ pub async fn handle_frontend_to_backend_messages(
             }
             FrontendToBackendMessage::SkipCurrentSong => {
                 song_queue.skip_current().await;
+                broadcast_next_song(&song_queue, &overlay_ws_state).await;
                 send_song_queue_to_frontend(&song_queue, &backend_tx).await;
             }
         }
@@ -1019,6 +1075,7 @@ async fn connect_to_chat(
     tts_service: &Arc<TTSService>,
     language_config: &Arc<RwLock<LanguageConfig>>,
     song_queue: &SongRequestQueue,
+    overlay_ws: &WebSocketState,
 ) {
     // Abort any existing connection first
     if let Some(handle) = twitch_task_handle.take() {
@@ -1052,6 +1109,7 @@ async fn connect_to_chat(
     let tts_service_clone = tts_service.clone();
     let language_config_clone = language_config.clone();
     let song_queue_clone = song_queue.clone();
+    let overlay_ws_clone = overlay_ws.clone();
 
     // Spawn the twitch handler task and store the handle
     let handle = tokio::spawn(async move {
@@ -1064,6 +1122,7 @@ async fn connect_to_chat(
             tts_service_clone,
             language_config_clone,
             song_queue_clone,
+            overlay_ws_clone,
             welcome_message,
         )
         .await;
@@ -1283,6 +1342,8 @@ async fn handle_test_overlay_wheel(
 pub async fn handle_overlay_client_messages(
     mut rx: tokio::sync::mpsc::Receiver<crate::backend::overlay::websocket::OverlayClientMessage>,
     backend_tx: tokio::sync::mpsc::Sender<BackendToFrontendMessage>,
+    song_queue: SongRequestQueue,
+    overlay_ws_state: WebSocketState,
 ) {
     use crate::backend::overlay::websocket::OverlayClientMessage;
 
@@ -1305,8 +1366,41 @@ pub async fn handle_overlay_client_messages(
                 handle_position_update(element, x, y, scale, &backend_tx).await;
             }
             OverlayClientMessage::RequestConfig => {
-                log::debug!("Overlay requested configuration");
-                // Could send current positions here if needed
+                let config = crate::backend::config::load_config();
+                let positions = serde_json::json!({
+                    "wheel": config.overlay.positions.wheel,
+                    "alert": config.overlay.positions.alert,
+                    "image": config.overlay.positions.image,
+                    "text": config.overlay.positions.text,
+                    "player": config.overlay.positions.player,
+                    "player_visible": config.overlay.player_visible,
+                    "title_visible": config.song_request.title_visible,
+                    "video_visible": config.song_request.video_visible,
+                });
+                overlay_ws_state.broadcast(OverlayEvent::ConfigUpdate { positions }).await;
+                overlay_ws_state.broadcast(OverlayEvent::SetPlayerVolume {
+                    volume: config.song_request.volume,
+                }).await;
+            }
+            OverlayClientMessage::SongEnded => {
+                song_queue.skip_current().await;
+                broadcast_next_song(&song_queue, &overlay_ws_state).await;
+                send_song_queue_to_frontend(&song_queue, &backend_tx).await;
+            }
+            OverlayClientMessage::PlayerVisibilityUpdate { visible } => {
+                let mut config = crate::backend::config::load_config();
+                config.overlay.player_visible = visible;
+                crate::backend::config::save_config(&config);
+            }
+            OverlayClientMessage::VideoVisibilityUpdate { visible } => {
+                let mut config = crate::backend::config::load_config();
+                config.song_request.video_visible = visible;
+                crate::backend::config::save_config(&config);
+            }
+            OverlayClientMessage::TitleVisibilityUpdate { visible } => {
+                let mut config = crate::backend::config::load_config();
+                config.song_request.title_visible = visible;
+                crate::backend::config::save_config(&config);
             }
         }
     }
@@ -1404,6 +1498,11 @@ async fn handle_position_update(
             config.overlay.positions.text.x = x;
             config.overlay.positions.text.y = y;
             config.overlay.positions.text.scale = scale;
+        }
+        "player" => {
+            config.overlay.positions.player.x = x;
+            config.overlay.positions.player.y = y;
+            config.overlay.positions.player.scale = scale;
         }
         _ => {
             log::warn!("Unknown overlay element: {}", element);

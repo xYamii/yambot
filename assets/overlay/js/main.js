@@ -133,8 +133,38 @@ function handleEvent(event) {
             handleConfigUpdate(event);
             break;
 
+        case 'play_song':
+            if (typeof playSong === 'function') {
+                const container = document.getElementById('player-container');
+                if (container) container.classList.remove('hidden');
+                playSong(event.video_id, event.title);
+            }
+            break;
+
+        case 'stop_player':
+            if (typeof stopPlayer === 'function') stopPlayer();
+            break;
+
+        case 'pause_player':
+            if (typeof pausePlayer === 'function') pausePlayer();
+            break;
+
+        case 'resume_player':
+            if (typeof resumePlayer === 'function') resumePlayer();
+            break;
+
+        case 'set_player_volume':
+            if (typeof setPlayerVolume === 'function') setPlayerVolume(event.volume);
+            break;
+
+        case 'player_settings_update':
+            if (typeof setTitleVisible === 'function') setTitleVisible(event.title_visible);
+            if (typeof setVideoVisible === 'function') setVideoVisible(event.video_visible);
+            updateTitleButton(event.title_visible);
+            updateVideoButton(event.video_visible);
+            break;
+
         case 'ping':
-            // Just a keep-alive, no action needed
             break;
 
         default:
@@ -183,6 +213,26 @@ function applyPositions(positions) {
         wheelContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
         wheelContainer.dataset.scale = scale;
     }
+    if (positions.player) {
+        const playerContainer = document.getElementById('player-container');
+        playerContainer.style.left = `${positions.player.x}%`;
+        playerContainer.style.top = `${positions.player.y}%`;
+        const scale = positions.player.scale || 1;
+        playerContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
+        playerContainer.dataset.scale = scale;
+    }
+    if (positions.player_visible !== undefined) {
+        if (typeof setPlayerVisible === 'function') setPlayerVisible(positions.player_visible);
+        updateVisibilityButton(positions.player_visible);
+    }
+    if (positions.title_visible !== undefined) {
+        if (typeof setTitleVisible === 'function') setTitleVisible(positions.title_visible);
+        updateTitleButton(positions.title_visible);
+    }
+    if (positions.video_visible !== undefined) {
+        if (typeof setVideoVisible === 'function') setVideoVisible(positions.video_visible);
+        updateVideoButton(positions.video_visible);
+    }
 }
 
 /**
@@ -215,11 +265,58 @@ function showConfigPanel() {
             <p>Drag elements to reposition them.</p>
             <p>Use corner handles to resize.</p>
             <p>Press 'C' to exit config mode.</p>
+            <div class="config-btn-row">
+                <button id="toggle-player-btn" onclick="togglePlayerVisibility()">Hide Player</button>
+                <button id="toggle-title-btn" onclick="toggleTitleVisibility()">Hide Title</button>
+                <button id="toggle-video-btn" onclick="toggleVideoVisibility()">Show Video</button>
+            </div>
             <button onclick="resetPositions()">Reset Positions</button>
         `;
         document.body.appendChild(panel);
     }
     panel.classList.remove('hidden');
+    updateVisibilityButton(typeof playerVisible !== 'undefined' ? playerVisible : true);
+}
+
+function togglePlayerVisibility() {
+    const next = !(typeof playerVisible !== 'undefined' ? playerVisible : true);
+    if (typeof setPlayerVisible === 'function') setPlayerVisible(next);
+    window.playerVisible = next;
+    updateVisibilityButton(next);
+    send({ type: 'player_visibility_update', visible: next });
+}
+
+function toggleTitleVisibility() {
+    const btn = document.getElementById('toggle-title-btn');
+    const isVisible = btn && btn.textContent === 'Hide Title';
+    const next = !isVisible;
+    if (typeof setTitleVisible === 'function') setTitleVisible(next);
+    updateTitleButton(next);
+    send({ type: 'title_visibility_update', visible: next });
+}
+
+function toggleVideoVisibility() {
+    const btn = document.getElementById('toggle-video-btn');
+    const isVisible = btn && btn.textContent === 'Hide Video';
+    const next = !isVisible;
+    if (typeof setVideoVisible === 'function') setVideoVisible(next);
+    updateVideoButton(next);
+    send({ type: 'video_visibility_update', visible: next });
+}
+
+function updateVisibilityButton(visible) {
+    const btn = document.getElementById('toggle-player-btn');
+    if (btn) btn.textContent = visible ? 'Hide Player' : 'Show Player';
+}
+
+function updateTitleButton(visible) {
+    const btn = document.getElementById('toggle-title-btn');
+    if (btn) btn.textContent = visible ? 'Hide Title' : 'Show Title';
+}
+
+function updateVideoButton(visible) {
+    const btn = document.getElementById('toggle-video-btn');
+    if (btn) btn.textContent = visible ? 'Hide Video' : 'Show Video';
 }
 
 /**
@@ -237,7 +334,8 @@ function hideConfigPanel() {
  */
 function makeElementsDraggable() {
     const elements = [
-        { id: 'wheel-container', name: 'wheel' }
+        { id: 'wheel-container', name: 'wheel' },
+        { id: 'player-container', name: 'player' },
     ];
 
     elements.forEach(({ id, name }) => {
@@ -464,7 +562,8 @@ function stopResize(e) {
  */
 function resetPositions() {
     const defaults = {
-        wheel: { x: 50, y: 50, scale: 1.0 }
+        wheel: { x: 50, y: 50, scale: 1.0 },
+        player: { x: 10, y: 90, scale: 1.0 },
     };
 
     Object.entries(defaults).forEach(([name, pos]) => {

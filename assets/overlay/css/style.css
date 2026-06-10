@@ -309,9 +309,89 @@ body.config-mode .draggable {
 body.config-mode #wheel-container,
 body.config-mode #alert-container,
 body.config-mode #image-container,
-body.config-mode #text-container {
+body.config-mode #text-container,
+body.config-mode #player-container {
     display: block !important;
     opacity: 0.5;
+}
+
+/* Player container */
+#player-container {
+    position: fixed;
+    left: 10%;
+    top: 90%;
+    transform: translate(-50%, -50%);
+    z-index: 500;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+#player-container.player-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#player-title {
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    margin: 0;
+}
+
+#player-progress-bg {
+    width: 100%;
+    height: 4px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+#player-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #a855f7, #ec4899);
+    border-radius: 2px;
+    transition: width 0.5s linear;
+}
+
+/* Video wrapper — hidden by default, audio still plays */
+#player-video-wrapper {
+    width: 320px;
+    overflow: hidden;
+    border-radius: 4px 4px 0 0;
+}
+
+#player-video-wrapper.video-hidden {
+    /* Off-screen but still rendered so audio keeps playing */
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+}
+
+#yt-iframe {
+    display: block;
+    pointer-events: none;
+}
+
+/* Hide title text */
+#player-title.title-hidden {
+    display: none;
+}
+
+/* Config panel button row */
+.config-btn-row {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
 }
 
 /* Utility Classes */
